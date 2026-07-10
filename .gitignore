@@ -1,0 +1,12 @@
+.env
+streamlit.log
+streamlit.err.log
+streamlit_*.log
+logs/
+output/
+.tmp_uploads/
+__pycache__/
+*.pyc
+.agents/
+.codex_backups/
+.git_upload/

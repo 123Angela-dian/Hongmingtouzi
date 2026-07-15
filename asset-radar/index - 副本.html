@@ -1,0 +1,2346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>项目尽调报告自动化生成与阅读系统</title>
+<style>
+    :root {
+        --ms-blue: #002b5e;
+        --ms-blue-light: #00438a;
+        --bg-gray: #f4f5f7;
+        --border-gray: #e0e0e0;
+        --text-main: #333333;
+        --text-muted: #666666;
+        --text-light: #999999;
+        --risk-high: #8b0000;
+        --risk-medium: #d97706;
+        --risk-low: #4b5563;
+        --link-color: #0056b3;
+        --white: #ffffff;
+        --font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font-family); background-color: var(--bg-gray); color: var(--text-main); font-size: 13px; line-height: 1.5; overflow-x: hidden; }
+    a { color: var(--link-color); text-decoration: none; cursor: pointer; }
+    a:hover { text-decoration: underline; }
+    button { cursor: pointer; font-family: inherit; border: none; outline: none; }
+
+    /* Layout */
+    .header { background-color: var(--ms-blue); color: var(--white); padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: fixed; top: 0; width: 100%; z-index: 100; }
+    .header-left { display: flex; align-items: center; gap: 24px; }
+    .logo { display: flex; align-items: center; gap: 12px; border-right: 1px solid rgba(255,255,255,0.2); padding-right: 24px; }
+    .brand-mark { height: 32px; width: auto; display: block; background: #fff; border-radius: 4px; padding: 4px 6px; }
+    .brand-text { font-family: "Arial Black", "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 900; line-height: 1; letter-spacing: 0; color: #fff; }
+    .project-title { font-size: 14px; font-weight: 500; }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .search-bar { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); padding: 4px 12px; border-radius: 2px; color: white; width: 240px; font-size: 12px; }
+    .search-bar::placeholder { color: rgba(255,255,255,0.6); }
+    .mode-switch { background: transparent; border: 1px solid var(--white); color: var(--white); padding: 4px 8px; font-size: 12px; border-radius: 2px; }
+
+    .main-container { margin-top: 56px; padding: 24px; max-width: 1440px; margin-left: auto; margin-right: auto; }
+    .view { display: none; animation: fadeIn 0.3s ease; }
+    .view.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* Components */
+    .card { background: var(--white); border: 1px solid var(--border-gray); border-radius: 2px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.02); }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid var(--border-gray); padding-bottom: 12px; }
+    .card-title { font-size: 16px; font-weight: bold; color: var(--ms-blue); }
+
+    .grid-layout { display: grid; grid-template-columns: 3fr 1fr; gap: 24px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+
+    .tag { display: inline-block; padding: 2px 6px; font-size: 11px; border-radius: 2px; font-weight: bold; }
+    .tag.high { background: #fde8e8; color: var(--risk-high); border: 1px solid #f8b4b4; }
+    .tag.medium { background: #fef3c7; color: var(--risk-medium); border: 1px solid #fde68a; }
+    .tag.low { background: #e5e7eb; color: var(--risk-low); border: 1px solid #d1d5db; }
+    .tag.status { background: #e1effe; color: var(--ms-blue); border: 1px solid #c3ddfd; }
+
+    .btn { padding: 6px 16px; font-size: 12px; font-weight: 500; border-radius: 2px; border: 1px solid transparent; }
+    .btn-primary { background: var(--ms-blue); color: var(--white); }
+    .btn-primary:hover { background: var(--ms-blue-light); }
+    .btn-outline { background: transparent; border-color: var(--ms-blue); color: var(--ms-blue); }
+    .btn-outline:hover { background: #f0f4f8; }
+    .btn-text { background: transparent; color: var(--link-color); padding: 0; }
+
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12px; }
+    th, td { border: 1px solid var(--border-gray); padding: 8px 12px; text-align: left; }
+    th { background-color: #fafafa; font-weight: bold; color: var(--text-muted); }
+
+    .data-list { list-style: none; }
+    .data-list li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+    .data-list li:last-child { border-bottom: none; }
+    .data-label { color: var(--text-muted); }
+    .data-value { font-weight: 500; text-align: right; }
+
+    .breadcrumb { margin-bottom: 16px; font-size: 12px; color: var(--text-muted); }
+    .breadcrumb span { cursor: pointer; color: var(--link-color); }
+    .breadcrumb span:hover { text-decoration: underline; }
+
+    /* Specific Views */
+    /* Dashboard */
+    .overview-bar { display: flex; gap: 32px; background: var(--white); padding: 16px 24px; border: 1px solid var(--border-gray); margin-bottom: 24px; }
+    .overview-item { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--border-gray); padding-right: 32px; }
+    .overview-item:last-child { border-right: none; }
+    .overview-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
+    .overview-value { font-size: 18px; font-weight: bold; color: var(--ms-blue); }
+    .overview-value.alert { color: var(--risk-high); }
+
+    .dim-card { cursor: pointer; transition: border-color 0.2s; height: 100%; display: flex; flex-direction: column; }
+    .dim-card:hover { border-color: var(--ms-blue); box-shadow: 0 2px 8px rgba(0,43,94,0.1); }
+    .dim-summary { font-size: 13px; margin-bottom: 16px; color: var(--text-main); flex-grow: 1; }
+    .dim-footer { border-top: 1px solid var(--border-gray); padding-top: 12px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+
+    .timeline { border-left: 2px solid var(--border-gray); padding-left: 16px; margin-left: 8px; }
+    .timeline-item { position: relative; margin-bottom: 16px; }
+    .timeline-item::before { content: ''; position: absolute; left: -21px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--ms-blue); border: 2px solid var(--white); }
+    .timeline-date { font-size: 11px; color: var(--text-light); margin-bottom: 4px; }
+    .timeline-content { font-size: 12px; }
+
+    /* Topic Report */
+    .report-section { margin-bottom: 32px; }
+    .report-section h3 { font-size: 14px; color: var(--ms-blue); margin-bottom: 12px; border-left: 3px solid var(--ms-blue); padding-left: 8px; }
+    .report-text { text-align: justify; margin-bottom: 12px; line-height: 1.6; }
+    .evidence-link { display: inline-flex; align-items: center; font-size: 11px; color: var(--link-color); background: #f0f4f8; padding: 2px 6px; border-radius: 2px; margin-left: 4px; cursor: pointer; border: 1px solid #d9e2ec; }
+    .evidence-link:hover { background: #e2e8f0; text-decoration: none; }
+    .evidence-link::before { content: '📄'; margin-right: 4px; font-size: 10px; }
+
+    /* Drawer */
+    .drawer-overlay { display: none; position: fixed; top: 56px; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 200; }
+    .drawer { position: fixed; top: 56px; right: -500px; width: 500px; bottom: 0; background: var(--white); box-shadow: -2px 0 8px rgba(0,0,0,0.1); z-index: 201; transition: right 0.3s ease; display: flex; flex-direction: column; }
+    .drawer.open { right: 0; }
+    .drawer-header { padding: 16px 24px; border-bottom: 1px solid var(--border-gray); display: flex; justify-content: space-between; align-items: center; background: #fafafa; }
+    .drawer-title { font-size: 14px; font-weight: bold; }
+    .drawer-close { cursor: pointer; font-size: 18px; color: var(--text-muted); }
+    .drawer-body { padding: 24px; overflow-y: auto; flex-grow: 1; }
+    .pdf-preview-mock { background: #525659; height: 300px; display: flex; align-items: center; justify-content: center; color: white; margin-bottom: 16px; border: 1px solid #333; }
+    .pdf-page { background: white; width: 80%; height: 90%; color: black; padding: 20px; font-size: 10px; position: relative; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .highlight-box { position: absolute; border: 2px solid rgba(255,0,0,0.5); background: rgba(255,255,0,0.2); }
+
+    /* Compare View */
+    .compare-container { display: flex; gap: 24px; }
+    .compare-col { flex: 1; border: 1px solid var(--border-gray); background: var(--white); }
+    .compare-header { padding: 12px 16px; background: #fafafa; border-bottom: 1px solid var(--border-gray); font-weight: bold; text-align: center; }
+    .compare-body { padding: 20px; }
+    .diff-del { background-color: #fde8e8; text-decoration: line-through; color: #9b1c1c; }
+    .diff-add { background-color: #def7ec; color: #03543f; }
+    .action-bar { margin-top: 24px; display: flex; justify-content: flex-end; gap: 16px; padding-top: 16px; border-top: 1px solid var(--border-gray); }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 300; align-items: center; justify-content: center; }
+    .modal-content { background: var(--white); width: 600px; border-radius: 2px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .modal-header { padding: 16px 24px; border-bottom: 1px solid var(--border-gray); display: flex; justify-content: space-between; align-items: center; }
+    .modal-body { padding: 24px; }
+    .upload-area { border: 2px dashed var(--border-gray); padding: 40px; text-align: center; background: #fafafa; cursor: pointer; margin-bottom: 16px; }
+    .upload-area:hover { border-color: var(--ms-blue); background: #f0f4f8; }
+    .progress-bar { height: 4px; background: var(--border-gray); margin-top: 16px; display: none; }
+    .progress-fill { height: 100%; background: var(--ms-blue); width: 0%; transition: width 0.5s; }
+
+    /* Reading Mode */
+    body.mode-summary .detail-only { display: none !important; }
+    body.mode-summary .evidence-link { display: none !important; }
+
+    /* Project switcher */
+    .project-select { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff; height: 32px; padding: 0 10px; border-radius: 2px; font-size: 13px; min-width: 310px; }
+    .project-select option { color: #111; background: #fff; }
+    .new-project-btn { height: 32px; padding: 0 12px; border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.12); color: #fff; border-radius: 2px; font-size: 13px; }
+    .new-project-btn:hover { background: rgba(255,255,255,0.22); }
+    .radar-entry-btn { height: 32px; padding: 0 14px; border: 1px solid rgba(255,255,255,0.55); background: #fff; color: var(--ms-blue); border-radius: 2px; font-size: 13px; font-weight: 700; }
+    .radar-entry-btn:hover { background: #eef5ff; }
+    .blank-dashboard .dim-card { opacity: .45; pointer-events: none; }
+    .blank-dashboard .blank-notice { border: 1px dashed var(--border-gray); background: #fff; padding: 22px; margin-bottom: 18px; text-align: center; }
+    .blank-dashboard .blank-notice h2 { font-size: 20px; color: var(--ms-blue); margin-bottom: 8px; }
+    .blank-dashboard .blank-muted { color: var(--text-muted); font-size: 13px; line-height: 1.8; }
+    .blank-dashboard .pending-update-btn { opacity: .55; cursor: not-allowed; }
+    .dimension-hero { display: grid; grid-template-columns: 1.4fr repeat(4, minmax(120px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .judgement-card { background: #fff; border-top: 3px solid var(--ms-blue); padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    .metric-card { background: #fff; padding: 14px; border: 1px solid var(--border-gray); }
+    .metric-num { display: block; font-size: 22px; font-weight: 700; color: var(--ms-blue); margin-top: 4px; }
+    .metric-desc { display:block; margin-top:10px; font-size:12px; line-height:1.6; color:var(--text-muted); }
+    .material-tabs { display:flex; gap:8px; margin-bottom:16px; }
+    .material-tabs button { border:1px solid var(--border-gray); background:#fff; padding:8px 14px; border-radius:2px; color:var(--text-main); }
+    .material-tabs button.active { background:var(--ms-blue); color:#fff; border-color:var(--ms-blue); }
+    .material-file-row { display:grid; grid-template-columns: 28px 1.2fr .8fr .8fr .6fr 72px; gap:12px; align-items:center; padding:12px; border-bottom:1px solid var(--border-gray); font-size:12px; }
+    .material-file-row:hover { background:#f9fafb; }
+    .delete-file-btn { background:#fff; color:var(--risk-high); border:1px solid #f0b4b4; padding:5px 10px; border-radius:2px; }
+    .topic-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .mini-chart { height: 74px; display: flex; align-items: end; gap: 7px; padding: 10px 4px 0; border-top: 1px solid var(--border-gray); margin-top: 12px; }
+    .mini-chart span { flex: 1; background: #d8e2ef; border-bottom: 2px solid var(--ms-blue); min-height: 14px; }
+    .evidence-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 18px; }
+    .compact-list { padding-left: 18px; font-size: 12px; line-height: 1.8; color: var(--text-main); }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .section-heading h2 { font-size: 16px; color: var(--ms-blue); }
+    .collapse-toggle { width: 24px; height: 24px; border: 1px solid var(--border-gray); background: #fff; color: var(--ms-blue); border-radius: 2px; font-size: 12px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+    .collapse-toggle:hover { background: #f0f4f8; border-color: var(--ms-blue); }
+    .collapsible-section.collapsed { display: none; }
+    .report-preview { background: #fff; border: 1px solid var(--border-gray); padding: 18px 20px; margin-top: 22px; }
+    .report-preview p { color: var(--text-muted); font-size: 13px; line-height: 1.8; margin-bottom: 14px; }
+    .empty-report { min-height: 360px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); border: 1px dashed var(--border-gray); background: #fafafa; font-size: 14px; }
+    .info-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .info-cell { background: #fff; border: 1px solid var(--border-gray); padding: 12px; min-height: 72px; }
+    .info-cell strong { display: block; color: var(--text-muted); font-size: 11px; margin-bottom: 8px; font-weight: 500; }
+    .info-cell span { display: block; color: var(--text-main); font-size: 14px; font-weight: 700; }
+    .chapter-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+    .chapter-card { border: 1px solid var(--border-gray); background: #fff; padding: 14px; min-height: 126px; display: flex; flex-direction: column; justify-content: space-between; }
+    .chapter-title { color: var(--ms-blue); font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+    .chapter-desc { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+    .mini-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .coverage-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+    .coverage-row:last-child { border-bottom: none; }
+    .coverage-bar { height: 6px; background: #edf2f7; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+    .coverage-fill { height: 100%; background: var(--ms-blue); }
+    .missing-item { padding: 10px 0; border-bottom: 1px solid #f0f0f0; font-size: 12px; line-height: 1.6; }
+    .missing-item:last-child { border-bottom: none; }
+    .strategy-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .strategy-card { background: #fff; border: 1px solid var(--border-gray); padding: 14px; min-height: 130px; }
+    .strategy-card h3 { color: var(--ms-blue); font-size: 14px; margin-bottom: 8px; }
+    .strategy-card p { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+    .risk-check-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .risk-check-card { background: #fff; border: 1px solid var(--border-gray); padding: 12px; }
+    .risk-check-card h3 { display: flex; justify-content: space-between; align-items: center; color: var(--ms-blue); font-size: 13px; margin-bottom: 8px; }
+    .matrix-table td, .matrix-table th { vertical-align: top; }
+    .flow-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .flow-card { border: 1px solid var(--border-gray); background: #fff; padding: 16px; min-height: 180px; }
+    .flow-card h3 { color: var(--ms-blue); font-size: 15px; margin-bottom: 12px; }
+    .export-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .export-card { border: 1px solid var(--border-gray); background: #fff; padding: 14px; text-align: center; }
+    .export-card strong { color: var(--ms-blue); display: block; margin-bottom: 8px; font-size: 14px; }
+
+    /* Asset Radar */
+    .radar-hero { background: #fff; border: 1px solid var(--border-gray); border-top: 4px solid var(--ms-blue); padding: 22px 24px; margin-bottom: 20px; display: grid; grid-template-columns: 1.4fr auto; gap: 20px; align-items: center; }
+    .radar-hero h1 { color: var(--ms-blue); font-size: 24px; margin-bottom: 8px; }
+    .radar-hero p { color: var(--text-muted); line-height: 1.8; }
+    .radar-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .radar-kpi { background: #fff; border: 1px solid var(--border-gray); padding: 14px; min-height: 86px; }
+    .radar-kpi strong { display: block; color: var(--ms-blue); font-size: 22px; margin-top: 6px; }
+    .radar-layout { display: grid; grid-template-columns: 2.1fr 1fr; gap: 24px; }
+    .radar-main-grid { display: grid; grid-template-columns: 2.1fr 1fr; gap: 24px; }
+    .radar-workflow { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 20px; }
+    .radar-node { background: #fff; border: 1px solid var(--border-gray); padding: 12px; min-height: 116px; position: relative; }
+    .radar-node::after { content: ''; position: absolute; right: -10px; top: 50%; width: 10px; border-top: 1px solid var(--border-gray); }
+    .radar-node:last-child::after { display: none; }
+    .radar-node h3 { color: var(--ms-blue); font-size: 13px; margin-bottom: 8px; }
+    .radar-node p { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+    .radar-node .model-name { display: block; color: var(--risk-low); font-size: 11px; margin-top: 8px; word-break: break-all; }
+    .asset-pool-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+    .asset-pool-tabs button { background: #fff; border: 1px solid var(--border-gray); color: var(--text-main); padding: 8px 12px; border-radius: 2px; font-size: 12px; }
+    .asset-pool-tabs button.active { background: var(--ms-blue); color: #fff; border-color: var(--ms-blue); }
+    .radar-table-wrap { max-height: 520px; overflow: auto; border: 1px solid var(--border-gray); }
+    .radar-table-wrap .radar-table { margin-bottom: 0; }
+    .radar-table-wrap thead th { position: sticky; top: 0; z-index: 2; background: #f3f2f1; }
+    .radar-table td { vertical-align: top; line-height: 1.6; }
+    .radar-table .asset-name { color: var(--ms-blue); font-weight: 700; cursor: pointer; }
+    .radar-detail-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
+    .radar-detail-box { background:#fff; border:1px solid var(--border-gray); padding:14px; margin-bottom:14px; line-height:1.8; }
+    .radar-detail-section { border-top: 1px solid var(--border-gray); padding-top: 12px; margin-top: 12px; }
+    .radar-detail-section:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+    .radar-detail-section h4 { margin: 0 0 6px; font-size: 13px; color: var(--text-main); }
+    .radar-detail-section p { margin: 0; color: var(--text-secondary); white-space: pre-wrap; }
+    .radar-pool-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    .radar-filter { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
+    .radar-filter select { border: 1px solid var(--border-gray); background: #fff; height: 32px; padding: 0 8px; font-size: 12px; }
+    .radar-th-filter { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 2px; margin-left: 4px; font-size: 10px; }
+    .radar-th-filter.active { color: var(--ms-blue); font-weight: 700; }
+    .radar-filter-menu { display: none; position: fixed; z-index: 360; width: 260px; max-height: 360px; overflow: auto; background: #fff; border: 1px solid var(--border-gray); box-shadow: 0 12px 28px rgba(0,0,0,.16); padding: 10px; font-size: 12px; }
+    .radar-filter-menu.open { display: block; }
+    .radar-filter-menu h4 { margin: 0 0 8px; font-size: 12px; color: var(--ms-blue); }
+    .radar-filter-option { display: block; width: 100%; text-align: left; border: 0; background: #fff; padding: 7px 8px; border-bottom: 1px solid #f3f2f1; cursor: pointer; font-size: 12px; color: var(--text-main); }
+    .radar-filter-option:hover, .radar-filter-option.active { background: #eef6ff; color: var(--ms-blue); }
+    .radar-scan-modal-mask { display: none; position: fixed; inset: 0; z-index: 350; background: rgba(15,23,42,.32); align-items: center; justify-content: center; }
+    .radar-scan-modal-mask.open { display: flex; }
+    .radar-scan-modal { width: min(520px, calc(100vw - 32px)); background: #fff; border: 1px solid var(--border-gray); box-shadow: 0 20px 60px rgba(0,0,0,.22); padding: 18px; }
+    .radar-scan-modal h3 { margin: 0 0 12px; color: var(--ms-blue); font-size: 18px; }
+    .radar-scan-field { margin-top: 14px; }
+    .radar-scan-field label { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 12px; }
+    .radar-source-checks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .radar-source-checks label { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-gray); padding: 8px; margin: 0; color: var(--text-main); }
+    .radar-scan-field input[type="text"] { width: 100%; border: 1px solid var(--border-gray); height: 34px; padding: 0 10px; font-size: 13px; }
+    .radar-scan-error { min-height: 18px; margin-top: 8px; color: var(--risk-high); font-size: 12px; }
+    .radar-scan-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    .attachment-row { border:1px solid var(--border-gray); padding:10px; margin-bottom:8px; font-size:12px; }
+    .attachment-row a { color: var(--ms-blue); font-weight:700; }
+    .watch-btn { border: 1px solid var(--border-gray); background: #fff; color: var(--text-main); padding: 5px 9px; border-radius: 2px; font-size: 12px; white-space: nowrap; }
+    .watch-btn.active { border-color: var(--risk-medium); background: #fff7ed; color: var(--risk-medium); font-weight: 700; }
+    .source-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .source-card { background: #fff; border: 1px solid var(--border-gray); padding: 12px; font-size: 12px; }
+    .source-card strong { display: block; color: var(--ms-blue); margin-bottom: 6px; }
+    .radar-alert { border-left: 3px solid var(--risk-medium); background: #fffbeb; padding: 10px 12px; margin-bottom: 10px; font-size: 12px; line-height: 1.6; }
+    .radar-progress-panel { margin-top: 16px; border: 1px solid var(--border-gray); background: #0f172a; color: #dbeafe; }
+    .radar-progress-panel.closed { display: none; }
+    .radar-progress-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.12); font-size: 12px; }
+    .radar-progress-meta { display: flex; align-items: center; gap: 10px; }
+    .radar-progress-close { display: none; background: transparent; color: #bfdbfe; border: 1px solid rgba(255,255,255,.22); padding: 3px 8px; font-size: 12px; border-radius: 2px; }
+    .radar-progress-close.show { display: inline-block; }
+    .radar-progress-summary { padding: 10px 12px 0; }
+    .radar-progress-count { display: flex; justify-content: space-between; color: #bfdbfe; font-size: 12px; margin-bottom: 6px; }
+    .radar-progress-track { height: 8px; background: rgba(255,255,255,.14); border-radius: 999px; overflow: hidden; }
+    .radar-progress-fill { height: 100%; width: 0%; background: #60a5fa; border-radius: inherit; transition: width .35s ease; }
+    .radar-progress-log { height: 220px; overflow: auto; padding: 10px 12px; font-family: Consolas, Monaco, monospace; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
+    .radar-progress-line { color: #bfdbfe; }
+    .radar-progress-line .muted { color: #94a3b8; }
+    .radar-progress-line.error { color: #fecaca; }
+    .model-route-row { display: grid; grid-template-columns: 1fr 1.2fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+    .model-route-row:last-child { border-bottom: none; }
+    .radar-toast { display: none; position: fixed; right: 24px; top: 72px; width: 360px; background: #fff; border: 1px solid var(--border-gray); border-left: 4px solid var(--risk-medium); box-shadow: 0 12px 28px rgba(0,0,0,.14); z-index: 320; padding: 14px 16px; font-size: 13px; line-height: 1.7; }
+    .radar-toast.show { display: block; }
+    .radar-backstage-entry { position: fixed; left: 24px; bottom: 24px; z-index: 255; background: #fff; color: var(--ms-blue); border: 1px solid var(--border-gray); box-shadow: 0 8px 22px rgba(0,0,0,.12); padding: 8px 12px; border-radius: 2px; font-size: 12px; display: none; align-items: center; gap: 8px; }
+    .radar-backstage-entry.show { display: inline-flex; }
+    .radar-backstage-dot { width: 7px; height: 7px; border-radius: 50%; background: #16a34a; display: inline-block; }
+    .radar-backstage-panel { display: none; position: fixed; left: 24px; bottom: 66px; width: min(1120px, calc(100vw - 48px)); max-height: min(680px, calc(100vh - 96px)); overflow: auto; background: #fff; border: 1px solid var(--border-gray); box-shadow: 0 18px 44px rgba(0,0,0,.18); z-index: 310; padding: 18px; }
+    .radar-backstage-panel.open { display: block; }
+    .radar-backstage-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid var(--border-gray); padding-bottom: 10px; }
+    .radar-backstage-head h3 { color: var(--ms-blue); font-size: 16px; }
+
+    /* AI assistant */
+    .ai-fab { position: fixed; right: 24px; bottom: 24px; width: 56px; height: 56px; border-radius: 50%; background: var(--ms-blue); color: white; z-index: 260; display: flex; align-items: center; justify-content: center; font-size: 24px; box-shadow: 0 10px 24px rgba(0,43,94,.28); }
+    .ai-panel { position: fixed; right: 24px; bottom: 92px; width: min(760px, calc(100vw - 48px)); height: min(620px, calc(100vh - 120px)); background: #fff; border: 1px solid var(--border-gray); box-shadow: 0 18px 48px rgba(0,0,0,.18); z-index: 270; display: none; flex-direction: column; border-radius: 8px; overflow: hidden; }
+    .ai-panel.open { display: flex; }
+    .ai-top { height: 54px; display: flex; justify-content: space-between; align-items: center; padding: 0 18px; border-bottom: 1px solid var(--border-gray); background: #fbfbfc; }
+    .ai-body { flex: 1; display: grid; grid-template-columns: 1fr 210px; min-height: 0; }
+    .ai-chat { padding: 28px 34px; overflow: auto; }
+    .ai-welcome { text-align: center; font-size: 26px; margin: 34px 0; color: #111; }
+    .ai-msg { max-width: 82%; padding: 12px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; line-height: 1.7; }
+    .ai-msg.assistant { background: #f5f7fa; border: 1px solid var(--border-gray); }
+    .ai-msg.user { margin-left: auto; background: var(--ms-blue); color: #fff; }
+    .ai-sources { border-left: 1px solid var(--border-gray); background: #fafafa; padding: 14px; overflow: auto; }
+    .source-card { background: #fff; border: 1px solid var(--border-gray); padding: 10px; margin-bottom: 10px; font-size: 12px; }
+    .ai-input-zone { border-top: 1px solid var(--border-gray); padding: 12px 18px 14px; }
+    .context-switch { display: flex; gap: 8px; margin-bottom: 10px; }
+    .context-switch button, .quick-actions button { background: #fff; border: 1px solid var(--border-gray); padding: 6px 10px; font-size: 12px; border-radius: 16px; color: var(--text-main); }
+    .context-switch button.active { background: var(--ms-blue); color: #fff; border-color: var(--ms-blue); }
+    .ai-input-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border-gray); border-radius: 22px; padding: 8px 10px 8px 14px; }
+    .ai-input-row input { flex: 1; border: none; outline: none; font-size: 14px; }
+    .send-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--ms-blue); color: white; }
+    .quick-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+</style>
+</head>
+<body>
+
+<header class="header">
+    <div class="header-left">
+        <div class="logo">
+            <img class="brand-mark" src="assets/hongming-logo.png" alt="弘明投资">
+            <span class="brand-text">Credit OS</span>
+        </div>
+        <select class="project-select" id="projectSelect" onchange="switchProject()">
+            <option value="星辉商业地产并购项目|PRJ-2023-089">星辉商业地产并购项目（ID：PRJ-2023-089）</option>
+            <option value="海辰城市更新处置项目|PRJ-2024-017">海辰城市更新处置项目（ID：PRJ-2024-017）</option>
+            <option value="云湾产业园债务重组项目|PRJ-2024-052">云湾产业园债务重组项目（ID：PRJ-2024-052）</option>
+            <option value="北城文旅资产包项目|PRJ-2025-006">北城文旅资产包项目（ID：PRJ-2025-006）</option>
+        </select>
+        <button class="new-project-btn" onclick="createProject()">&lt;新建项目&gt;</button>
+        <button class="radar-entry-btn" onclick="navTo('view-asset-radar')">资产雷达</button>
+    </div>
+    <div class="header-right">
+        <input type="text" class="search-bar" placeholder="搜索主体、合同、资产、金额...">
+        <button class="mode-switch" onclick="toggleMode()" id="modeBtn">切换至摘要模式</button>
+        <div style="font-size: 12px;">当前用户: 投资部 - 张伟</div>
+    </div>
+</header>
+
+<main class="main-container">
+
+    <!-- ================= 一级窗口：总控台 ================= -->
+    <div id="view-dashboard" class="view active">
+        <div class="overview-bar">
+            <div class="overview-item">
+                <span class="overview-label">报告版本</span>
+                <span class="overview-value">v4.2 (Draft)</span>
+            </div>
+            <div class="overview-item">
+                <span class="overview-label">最近更新</span>
+                <span class="overview-value" style="font-size: 14px; line-height: 24px;">2023-10-27 14:30</span>
+            </div>
+            <div class="overview-item">
+                <span class="overview-label">材料总数</span>
+                <span class="overview-value">1,248 份</span>
+            </div>
+            <div class="overview-item">
+                <span class="overview-label">本次新增</span>
+                <span class="overview-value">3 份</span>
+            </div>
+            <div class="overview-item">
+                <span class="overview-label">待人工确认</span>
+                <span class="overview-value alert">2 项</span>
+            </div>
+            <div class="overview-item">
+                <span class="overview-label">整体风险等级</span>
+                <span class="tag medium" style="margin-top: 4px;">中等风险</span>
+            </div>
+        </div>
+
+        <div class="grid-layout">
+            <!-- 左侧：四维度 -->
+            <div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">项目定义</span>
+                        <span class="tag status">内部测试口径</span>
+                    </div>
+                    <div class="info-grid">
+                        <div class="info-cell"><strong>项目名称</strong><span>星辉商业地产并购项目</span></div>
+                        <div class="info-cell"><strong>物业类型</strong><span>商业/办公综合体</span></div>
+                        <div class="info-cell"><strong>项目体量</strong><span>中大型资产</span></div>
+                        <div class="info-cell"><strong>项目阶段</strong><span>交易支持/尽调中</span></div>
+                    </div>
+                    <div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.7;">
+                        应用场景：用于内部投决研判、材料结构化解析、尽调报告生成与版本确认。后续可根据项目类型切换为住宅开发、城市更新、困境资产盘活或产策定位工作流。
+                    </div>
+                </div>
+
+                <div class="section-heading">
+                    <h2>维度总览</h2>
+                    <button class="collapse-toggle" id="dimensionToggle" onclick="toggleSection('dimensionOverviewBody','dimensionToggle')" title="收起/展开维度总览">▼</button>
+                </div>
+                <div class="grid-4 collapsible-section" id="dimensionOverviewBody">
+                    <!-- 资产 -->
+                    <div class="card dim-card" onclick="navTo('view-dimension', '资产维度')">
+                        <div class="card-header">
+                            <span class="card-title">资产</span>
+                            <span class="tag high">高风险 1</span>
+                        </div>
+                        <div class="dim-summary">
+                            目标公司核心资产为位于CBD的星辉大厦，总建筑面积12万平米。目前存在1处重大权属瑕疵，20%面积处于抵押状态。
+                        </div>
+                        <ul class="data-list detail-only" style="margin-bottom: 16px;">
+                            <li><span class="data-label">估值总额</span><span class="data-value">¥ 45.2 亿</span></li>
+                            <li><span class="data-label">可确权比例</span><span class="data-value">95%</span></li>
+                        </ul>
+                        <div class="dim-footer">
+                            <span style="color: var(--text-light);">待核实: 3项</span>
+                            <span style="color: var(--ms-blue);">查看详情 &rarr;</span>
+                        </div>
+                    </div>
+                    <!-- 经济 -->
+                    <div class="card dim-card" onclick="navTo('view-dimension', '经济维度')">
+                        <div class="card-header">
+                            <span class="card-title">经济</span>
+                            <span class="tag medium">中风险 2</span>
+                        </div>
+                        <div class="dim-summary">
+                            周边竞品新增供应量超预期，租金增长率假设需下调。当前出租率85%，主力店租约剩余平均年限3.2年。
+                        </div>
+                        <ul class="data-list detail-only" style="margin-bottom: 16px;">
+                            <li><span class="data-label">NOI (预测)</span><span class="data-value">¥ 2.1 亿/年</span></li>
+                            <li><span class="data-label">Cap Rate</span><span class="data-value">4.5%</span></li>
+                        </ul>
+                        <div class="dim-footer">
+                            <span style="color: var(--text-light);">待核实: 0项</span>
+                            <span style="color: var(--ms-blue);">查看详情 &rarr;</span>
+                        </div>
+                    </div>
+                    <!-- 法律 -->
+                    <div class="card dim-card" onclick="navTo('view-dimension', '法律维度')">
+                        <div class="card-header">
+                            <span class="card-title">法律</span>
+                            <span class="tag low">低风险</span>
+                        </div>
+                        <div class="dim-summary">
+                            交易结构设计合规，未发现重大未决诉讼。历史股权变更记录完整，无代持情况。需关注环保验收补充文件。
+                        </div>
+                        <ul class="data-list detail-only" style="margin-bottom: 16px;">
+                            <li><span class="data-label">重大诉讼</span><span class="data-value">0 起</span></li>
+                            <li><span class="data-label">合规审查</span><span class="data-value">已通过</span></li>
+                        </ul>
+                        <div class="dim-footer">
+                            <span style="color: var(--text-light);">待核实: 1项</span>
+                            <span style="color: var(--ms-blue);">查看详情 &rarr;</span>
+                        </div>
+                    </div>
+                    <!-- 财务 -->
+                    <div class="card dim-card" onclick="navTo('view-dimension', '财务维度')">
+                        <div class="card-header">
+                            <span class="card-title">财务</span>
+                            <span class="tag medium">中风险 1</span>
+                        </div>
+                        <div class="dim-summary">
+                            历史现金流稳定，但短期债务集中到期压力较大。存在一笔5000万的关联方往来款需进一步穿透核查。
+                        </div>
+                        <ul class="data-list detail-only" style="margin-bottom: 16px;">
+                            <li><span class="data-label">资产负债率</span><span class="data-value">62%</span></li>
+                            <li><span class="data-label">EBITDA</span><span class="data-value">¥ 1.8 亿</span></li>
+                        </ul>
+                        <div class="dim-footer">
+                            <span style="color: var(--text-light);">待核实: 2项</span>
+                            <span style="color: var(--ms-blue);">查看详情 &rarr;</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-heading" style="margin-top: 24px;">
+                    <h2>整体报告</h2>
+                    <button class="collapse-toggle" id="overallReportToggle" onclick="toggleSection('overallReportBody','overallReportToggle')" title="收起/展开整体报告">▼</button>
+                </div>
+                <div class="report-preview collapsible-section" id="overallReportBody">
+                    <p>这里用于展示项目整体报告的简介。后续可自动汇总资产、经济、法律、财务四个维度的核心结论、关键风险、待核实事项与投资建议。</p>
+                    <div class="mini-actions">
+                        <button class="btn btn-primary" onclick="navTo('view-report')">阅读更多</button>
+                        <button class="btn btn-outline" onclick="navTo('view-framework')">查看报告框架</button>
+                    </div>
+                    <div class="chapter-grid">
+                        <div class="chapter-card">
+                            <div>
+                                <div class="chapter-title">一、核心结论</div>
+                                <div class="chapter-desc">汇总项目进入价值、主要风险、决策建议。</div>
+                            </div>
+                            <span class="tag medium">草稿待确认</span>
+                        </div>
+                        <div class="chapter-card">
+                            <div>
+                                <div class="chapter-title">二、资产与市场</div>
+                                <div class="chapter-desc">联动资产底盘、区位市场、竞品表现与去化判断。</div>
+                            </div>
+                            <span class="tag status">可生成</span>
+                        </div>
+                        <div class="chapter-card">
+                            <div>
+                                <div class="chapter-title">三、交易与财务</div>
+                                <div class="chapter-desc">覆盖交易结构、债务融资、收益测算和资金缺口。</div>
+                            </div>
+                            <span class="tag high">缺数据</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-heading" style="margin-top: 24px;">
+                    <h2>产策专项模块</h2>
+                </div>
+                <div class="strategy-grid">
+                    <div class="strategy-card">
+                        <h3>土地研判</h3>
+                        <p>外部属性、内部属性、不利条件与土地价值判断。</p>
+                    </div>
+                    <div class="strategy-card">
+                        <h3>市场分析</h3>
+                        <p>城市、板块、竞品三层市场判断与机会识别。</p>
+                    </div>
+                    <div class="strategy-card">
+                        <h3>客户研究</h3>
+                        <p>地缘、辐射、溢出三层客群与客户画像。</p>
+                    </div>
+                    <div class="strategy-card">
+                        <h3>产品方案</h3>
+                        <p>土地+市场+客户推导产品组合、面积段和价格定位。</p>
+                    </div>
+                    <div class="strategy-card">
+                        <h3>经营策略</h3>
+                        <p>开发节奏、目标成本、首开策略与经营目标。</p>
+                    </div>
+                </div>
+                <div class="mini-actions" style="margin-bottom: 20px;">
+                    <button class="btn btn-outline" onclick="navTo('view-customer-product')">查看客群与产品推导</button>
+                    <button class="btn btn-outline" onclick="navTo('view-competitors')">查看竞品矩阵</button>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">六大投前风险排查</span>
+                        <span class="tag medium">2项待补材料</span>
+                    </div>
+                    <div class="risk-check-grid">
+                        <div class="risk-check-card"><h3>设计条件 <span class="tag status">已排查</span></h3><p class="dim-summary">容积率、限高、密度约束已入库。</p></div>
+                        <div class="risk-check-card"><h3>用地风险 <span class="tag medium">待确认</span></h3><p class="dim-summary">日照、通廊和退距需补充规划意见。</p></div>
+                        <div class="risk-check-card"><h3>地质风险 <span class="tag low">低风险</span></h3><p class="dim-summary">暂未发现特殊地质影响，仍需勘察报告。</p></div>
+                        <div class="risk-check-card"><h3>信息跟踪 <span class="tag medium">进行中</span></h3><p class="dim-summary">报建、施工、验收节点待更新。</p></div>
+                        <div class="risk-check-card"><h3>成本适配 <span class="tag high">高风险</span></h3><p class="dim-summary">地下室、续建和工程未付款口径待核实。</p></div>
+                        <div class="risk-check-card"><h3>奖励政策 <span class="tag status">待识别</span></h3><p class="dim-summary">装配式、绿建、海绵城市等政策可进一步检索。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：工作流与动态 -->
+            <div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">材料补充与解析</span>
+                    </div>
+                    <button class="btn btn-primary" style="width: 100%; margin-bottom: 12px;" onclick="openUploadModal()">+ 上传新材料</button>
+                    <button class="btn btn-outline" style="width: 100%; margin-bottom: 12px;" onclick="navTo('view-materials')">查看已上传材料</button>
+                    <button class="btn btn-outline pending-update-btn" style="width: 100%; margin-bottom: 16px;" onclick="navTo('view-compare')">
+                        查看待确认更新 <span style="background: var(--risk-high); color: white; padding: 0 6px; border-radius: 10px; font-size: 10px; margin-left: 4px;">2</span>
+                    </button>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">最近解析状态：</div>
+                    <div style="font-size: 12px; display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span>《星辉大厦2023Q3租赁台账.xlsx》</span>
+                        <span style="color: green;">已入库</span>
+                    </div>
+                    <div style="font-size: 12px; display: flex; justify-content: space-between;">
+                        <span>《关于地下车库产权的补充说明.pdf》</span>
+                        <span style="color: var(--risk-medium);">需确认</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">数据来源与引用覆盖率</span>
+                    </div>
+                    <div class="coverage-row">
+                        <div>关键数据已标注来源<div class="coverage-bar"><div class="coverage-fill" style="width:78%;"></div></div></div>
+                        <strong>78%</strong>
+                    </div>
+                    <div class="coverage-row">
+                        <div>用户上传材料引用占比<div class="coverage-bar"><div class="coverage-fill" style="width:64%;"></div></div></div>
+                        <strong>64%</strong>
+                    </div>
+                    <div class="coverage-row">
+                        <div>需外部补充/检索数据<div class="coverage-bar"><div class="coverage-fill" style="width:22%;"></div></div></div>
+                        <strong>22%</strong>
+                    </div>
+                    <div class="mini-actions">
+                        <button class="btn btn-outline" onclick="navTo('view-materials')">查看来源库</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">缺失数据清单</span>
+                        <span class="tag medium">5项</span>
+                    </div>
+                    <div class="missing-item"><strong>可用区间估算：</strong>M08/M09未来成交均价，可先用竞品区间测算。</div>
+                    <div class="missing-item"><strong>仅能定性判断：</strong>代建解除后的违约金与交接责任。</div>
+                    <div class="missing-item"><strong>完全缺失：</strong>最新债权余额及利息统一口径。</div>
+                    <div class="mini-actions">
+                        <button class="btn btn-outline" onclick="openUploadModal()">补充材料</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">导出中心</span>
+                        <span class="tag status">内部预览</span>
+                    </div>
+                    <ul class="compact-list">
+                        <li>导出前检查：缺失来源 7 条</li>
+                        <li>未确认版本更新：2 项</li>
+                        <li>报告章节完成度：46%</li>
+                    </ul>
+                    <div class="mini-actions">
+                        <button class="btn btn-primary" onclick="navTo('view-export')">进入导出中心</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">核心风险预警</span>
+                    </div>
+                    <ul style="padding-left: 16px; font-size: 12px; color: var(--text-main);">
+                        <li style="margin-bottom: 8px;"><span style="color: var(--risk-high); font-weight: bold;">[高]</span> 资产维度：地下3层车库（约5000平米）尚未取得独立产权证，存在无法确权风险。</li>
+                        <li style="margin-bottom: 8px;"><span style="color: var(--risk-medium); font-weight: bold;">[中]</span> 财务维度：2024年6月将有3.5亿银行贷款到期，需提前安排过桥资金。</li>
+                        <li><span style="color: var(--risk-medium); font-weight: bold;">[中]</span> 经济维度：主力租户A公司提出提前退租意向，可能影响明年NOI约15%。</li>
+                    </ul>
+                </div>
+
+                <div class="card detail-only">
+                    <div class="card-header">
+                        <span class="card-title">系统更新动态</span>
+                    </div>
+                    <div class="timeline">
+                        <div class="timeline-item">
+                            <div class="timeline-date">今天 14:30</div>
+                            <div class="timeline-content">解析《补充说明.pdf》，提取到车库产权信息，触发<a onclick="navTo('view-compare')">版本对比</a>。</div>
+                        </div>
+                        <div class="timeline-item">
+                            <div class="timeline-date">昨天 16:15</div>
+                            <div class="timeline-content">解析《租赁台账.xlsx》，自动更新【经济维度-收益测算】数据表。</div>
+                        </div>
+                        <div class="timeline-item">
+                            <div class="timeline-date">昨天 10:00</div>
+                            <div class="timeline-content">律师张伟确认了【法律维度-诉讼执行】的更新。</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：完整报告 ================= -->
+    <div id="view-report" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span>整体报告</span>
+        </div>
+        <div class="card" style="padding: 32px 40px;">
+            <div style="border-bottom: 2px solid var(--ms-blue); padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center;">
+                <h1 style="font-size: 22px; color: var(--ms-blue);">项目整体尽调报告</h1>
+                <div class="mini-actions" style="margin-top:0;">
+                    <button class="btn btn-outline" onclick="navTo('view-framework')">报告框架</button>
+                    <button class="btn btn-outline" onclick="window.print()">导出 PDF</button>
+                </div>
+            </div>
+            <div class="report-section">
+                <h3>章节生成与确认</h3>
+                <div class="chapter-grid">
+                    <div class="chapter-card"><div><div class="chapter-title">核心结论与投资建议</div><div class="chapter-desc">结论先行，沉淀投决会可直接阅读的摘要。</div></div><div class="mini-actions"><span class="tag medium">待确认</span><button class="btn btn-outline">查看草稿</button></div></div>
+                    <div class="chapter-card"><div><div class="chapter-title">资产底盘与权属</div><div class="chapter-desc">资产清单、证照、抵押、可处置边界。</div></div><div class="mini-actions"><span class="tag status">可生成</span><button class="btn btn-outline">生成正文</button></div></div>
+                    <div class="chapter-card"><div><div class="chapter-title">市场与竞品判断</div><div class="chapter-desc">城市、板块、竞品、去化与价格支撑。</div></div><div class="mini-actions"><span class="tag status">可生成</span><button class="btn btn-outline" onclick="navTo('view-competitors')">查看竞品</button></div></div>
+                    <div class="chapter-card"><div><div class="chapter-title">产策定位与产品推导</div><div class="chapter-desc">土地、市场、客户到产品方案的推导链。</div></div><div class="mini-actions"><span class="tag medium">待补材料</span><button class="btn btn-outline" onclick="navTo('view-customer-product')">查看推导</button></div></div>
+                    <div class="chapter-card"><div><div class="chapter-title">交易结构与风控</div><div class="chapter-desc">交易路径、资金安排、监管条件和退出纪律。</div></div><div class="mini-actions"><span class="tag high">缺口径</span><button class="btn btn-outline">列缺失项</button></div></div>
+                    <div class="chapter-card"><div><div class="chapter-title">财务测算与敏感性</div><div class="chapter-desc">货值、成本、税费、债务、收益和情景测算。</div></div><div class="mini-actions"><span class="tag high">缺数据</span><button class="btn btn-outline">补充材料</button></div></div>
+                </div>
+            </div>
+            <div class="empty-report">完整报告正文待生成</div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：报告框架确认 ================= -->
+    <div id="view-framework" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span>报告框架确认</span>
+        </div>
+        <div class="card" style="padding: 28px 34px;">
+            <div class="card-header">
+                <span class="card-title">整体报告框架确认</span>
+                <span class="tag medium">待业务确认</span>
+            </div>
+            <table class="matrix-table">
+                <thead>
+                    <tr><th>章节</th><th>二级内容</th><th>建议补充材料</th><th>状态</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>一、核心结论</td><td>项目判断、核心风险、投资建议、下一步动作</td><td>投委会关注问题清单、最新项目进展</td><td><span class="tag medium">待确认</span></td></tr>
+                    <tr><td>二、项目与资产底盘</td><td>项目概况、土地证照、工程进度、可售资源、抵押限制</td><td>最新楼盘表、证照清单、抵押物清单</td><td><span class="tag status">资料较全</span></td></tr>
+                    <tr><td>三、市场与竞品</td><td>城市/板块市场、竞品价格、去化速度、产品机会</td><td>近三月竞品成交台账、渠道访谈记录</td><td><span class="tag medium">需补充</span></td></tr>
+                    <tr><td>四、产策定位</td><td>土地研判、客群画像、产品组合、价格策略、开发节奏</td><td>客户访谈、产品定位初稿、规划强排方案</td><td><span class="tag medium">需补充</span></td></tr>
+                    <tr><td>五、交易与风控</td><td>股权链条、资金路径、债权口径、担保措施、退出安排</td><td>债权余额确认函、协议补充条款、监管账户流水</td><td><span class="tag high">关键缺口</span></td></tr>
+                    <tr><td>六、财务测算</td><td>剩余货值、未付成本、税费、资金缺口、敏感性情景</td><td>最新销售台账、成本台账、税务测算底稿</td><td><span class="tag high">关键缺口</span></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：竞品对比矩阵 ================= -->
+    <div id="view-competitors" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span>竞品对比矩阵</span>
+        </div>
+        <div class="card" style="padding: 28px 34px;">
+            <div class="card-header">
+                <span class="card-title">竞品对比矩阵</span>
+                <span class="tag status">产策专项</span>
+            </div>
+            <table class="matrix-table">
+                <thead>
+                    <tr><th>竞品</th><th>层级</th><th>主力产品</th><th>价格区间</th><th>月均流速</th><th>对本项目启示</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>标杆竞品A</td><td>上游</td><td>改善型住宅/大面积段</td><td>2.0-3.5万/㎡</td><td>约7套/月</td><td>验证高单价可成交，但去化速度依赖产品力和渠道。</td></tr>
+                    <tr><td>同级竞品B</td><td>同级</td><td>板式三房/四房</td><td>1.8-2.6万/㎡</td><td>约2-3套/月</td><td>可作为基准定价锚点，需强化差异化。</td></tr>
+                    <tr><td>拦截竞品C</td><td>下游</td><td>小面积刚改产品</td><td>1.1-1.6万/㎡</td><td>约3套/月</td><td>会压制总价敏感客户，需区分客群。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：客群画像与产品推导 ================= -->
+    <div id="view-customer-product" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span>客群画像与产品推导</span>
+        </div>
+        <div class="card" style="padding: 28px 34px;">
+            <div class="card-header">
+                <span class="card-title">土地 + 市场 + 客户 → 产品方案</span>
+                <span class="tag medium">待补客户资料</span>
+            </div>
+            <div class="flow-columns">
+                <div class="flow-card">
+                    <h3>土地条件</h3>
+                    <ul class="compact-list">
+                        <li>区位等级与配套成熟度</li>
+                        <li>规划指标、限高、用地边界</li>
+                        <li>不利因素与成本影响</li>
+                    </ul>
+                </div>
+                <div class="flow-card">
+                    <h3>市场与客群</h3>
+                    <ul class="compact-list">
+                        <li>地缘客群：板块内改善与换房需求</li>
+                        <li>辐射客群：可控通勤/旅居半径内客户</li>
+                        <li>溢出客群：高价板块外溢购买力</li>
+                    </ul>
+                </div>
+                <div class="flow-card">
+                    <h3>产品建议</h3>
+                    <ul class="compact-list">
+                        <li>产品组合：板式精品住宅+特色商业</li>
+                        <li>面积段：控制总价、保留改善感</li>
+                        <li>差异化：得房率、景观、社区底盘</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：导出中心 ================= -->
+    <div id="view-export" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span>导出中心</span>
+        </div>
+        <div class="card" style="padding: 28px 34px;">
+            <div class="card-header">
+                <span class="card-title">导出中心</span>
+                <span class="tag medium">导出前检查未通过</span>
+            </div>
+            <div class="export-grid">
+                <div class="export-card"><strong>Markdown</strong><button class="btn btn-outline">生成</button></div>
+                <div class="export-card"><strong>Word</strong><button class="btn btn-outline">生成</button></div>
+                <div class="export-card"><strong>PPT</strong><button class="btn btn-outline">生成</button></div>
+                <div class="export-card"><strong>HTML</strong><button class="btn btn-outline">生成</button></div>
+                <div class="export-card"><strong>PDF</strong><button class="btn btn-outline">生成</button></div>
+            </div>
+            <div class="card" style="margin-top:20px;">
+                <div class="card-header"><span class="card-title">导出前检查</span></div>
+                <ul class="compact-list">
+                    <li><span class="tag high">阻断</span> 债权余额口径未确认。</li>
+                    <li><span class="tag medium">提醒</span> 7条关键数据缺少来源标注。</li>
+                    <li><span class="tag medium">提醒</span> 2项版本更新尚未人工确认。</li>
+                    <li><span class="tag status">通过</span> 报告框架已建立，章节未缺失。</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：维度详情 ================= -->
+    <div id="view-dimension" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span id="dim-title-bread">资产维度</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 18px;">
+            <div>
+                <h1 style="font-size: 24px; color: var(--ms-blue);" id="dim-title">资产维度</h1>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" id="dim-one-liner">资产：有什么、权属是否清楚、能不能处置。</div>
+            </div>
+            <span class="tag status" id="dim-updated">最近更新: 2023-10-27</span>
+        </div>
+
+        <div class="dimension-hero">
+            <div class="judgement-card">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">顶部：维度总判断</div>
+                <h2 id="dim-judgement" style="font-size:18px;color:var(--ms-blue);margin-bottom:10px;">权属链条基本清晰，但地下车库及部分证照瑕疵影响处置确定性。</h2>
+                <p id="dim-summary-text" class="dim-summary">本维度结论摘要...</p>
+                <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+                    <span id="dim-risk" class="tag high">高风险</span>
+                    <span id="dim-impact" class="tag status">新材料影响：2个模块</span>
+                    <span id="dim-confirm" class="tag medium">待确认：3项</span>
+                </div>
+            </div>
+            <div class="metric-card"><span class="data-label" id="metric-label-1">土地面积</span><span class="metric-num" id="metric-value-1">62,400㎡</span><span class="metric-desc" id="metric-desc-1">项目红线内土地规模及权利边界。</span></div>
+            <div class="metric-card"><span class="data-label" id="metric-label-2">建筑面积</span><span class="metric-num" id="metric-value-2">182,000㎡</span><span class="metric-desc" id="metric-desc-2">已建、未建及可售面积的合计口径。</span></div>
+            <div class="metric-card"><span class="data-label" id="metric-label-3">证照完整度</span><span class="metric-num" id="metric-value-3">78%</span><span class="metric-desc" id="metric-desc-3">关键开发建设证照取得比例。</span></div>
+            <div class="metric-card"><span class="data-label" id="metric-label-4">可处置金额</span><span class="metric-num" id="metric-value-4">¥31.6亿</span><span class="metric-desc" id="metric-desc-4">剔除受限资产及折价后的可回收口径。</span></div>
+        </div>
+
+        <h2 style="font-size:16px;margin:18px 0 12px;color:var(--ms-blue);">专题模块</h2>
+        <div class="grid-4" id="topic-grid"></div>
+
+        <div class="evidence-grid detail-only">
+            <div class="card">
+                <div class="card-header"><span class="card-title">关联源文件</span></div>
+                <ul class="compact-list" id="dim-files"></ul>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">待追问问题</span></div>
+                <ul class="compact-list" id="dim-questions"></ul>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">更新记录与版本变化</span></div>
+                <ul class="compact-list" id="dim-updates"></ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：专题报告 ================= -->
+    <div id="view-topic" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> > <span onclick="navTo('view-dimension', '资产维度')">资产维度</span> > <span>权属情况</span>
+        </div>
+
+        <div class="card" style="padding: 32px 40px;">
+            <div style="border-bottom: 2px solid var(--ms-blue); padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center;">
+                <h1 style="font-size: 22px; color: var(--ms-blue);">资产维度：权属情况分析</h1>
+                <button class="btn btn-outline" onclick="window.print()">导出 PDF</button>
+            </div>
+
+            <div class="report-section">
+                <h3>1. 结论摘要</h3>
+                <div class="report-text">
+                    目标公司名下核心资产“星辉大厦”主体建筑（地上45层，地下1-2层）已取得完整的不动产权证书，产权清晰，无查封情况<span class="evidence-link" onclick="openDrawer('不动产权证书_星辉大厦.pdf', '第1-2页', '证明主体建筑产权归属目标公司，无查封。')">查看来源</span>。但地下3层车库（建筑面积约5,000平方米）因早期规划变更未及时补办手续，目前尚未取得独立产权证<span class="evidence-link" onclick="openDrawer('关于地下车库产权的补充说明.pdf', '第1页', '说明车库未确权原因及现状。')">查看来源</span>。
+                </div>
+                <div style="background: #fde8e8; border-left: 4px solid var(--risk-high); padding: 12px; margin-top: 12px; font-size: 12px;">
+                    <strong>风险判断 [高]：</strong> 地下车库无法确权可能导致该部分资产无法进行抵押融资或单独转让，在估值模型中建议将该部分资产价值剔除或施加极高的流动性折价。
+                </div>
+            </div>
+
+            <div class="report-section detail-only">
+                <h3>2. 事实依据与数据</h3>
+                <div class="report-text">
+                    根据系统提取的权属文件及相关说明，资产面积及确权情况统计如下：
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>资产部位</th>
+                            <th>规划用途</th>
+                            <th>建筑面积 (㎡)</th>
+                            <th>权属证号</th>
+                            <th>确权状态</th>
+                            <th>备注</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>地上1-5层</td>
+                            <td>商业</td>
+                            <td>25,000</td>
+                            <td>京(2018)朝阳区不动产权第00123号</td>
+                            <td>已确权</td>
+                            <td>已抵押</td>
+                        </tr>
+                        <tr>
+                            <td>地上6-45层</td>
+                            <td>办公</td>
+                            <td>80,000</td>
+                            <td>京(2018)朝阳区不动产权第00124号</td>
+                            <td>已确权</td>
+                            <td>无受限</td>
+                        </tr>
+                        <tr>
+                            <td>地下1-2层</td>
+                            <td>仓储/设备</td>
+                            <td>10,000</td>
+                            <td>京(2018)朝阳区不动产权第00125号</td>
+                            <td>已确权</td>
+                            <td>无受限</td>
+                        </tr>
+                        <tr style="background: #fff5f5;">
+                            <td>地下3层</td>
+                            <td>车库</td>
+                            <td>5,000</td>
+                            <td>-</td>
+                            <td style="color: var(--risk-high); font-weight: bold;">未确权</td>
+                            <td>规划变更遗留问题<span class="evidence-link" onclick="openDrawer('规划局关于星辉大厦地下空间变更的批复.pdf', '第2段', '显示规划变更但未完成最终验收。')">查看来源</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="report-section">
+                <h3>3. 待核实问题与建议</h3>
+                <ul style="padding-left: 20px; line-height: 1.8;">
+                    <li><strong>待核实：</strong> 需向当地规自委核实地下3层车库补办产权证的具体流程、预计周期及需补缴的土地出让金金额。<span class="tag status">待办</span></li>
+                    <li><strong>交易建议：</strong> 建议在SPA（股权购买协议）中设置交割先决条件，要求卖方在交割前完成车库确权；或在交易对价中扣减预计的补缴费用及罚款。</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：已上传材料 ================= -->
+    <div id="view-materials" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span>已上传材料库</span>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">已上传材料</span>
+                <span style="font-size:12px;color:var(--text-muted);">按资产、经济、法律、财务四个维度归档</span>
+            </div>
+            <div class="material-tabs">
+                <button class="active" onclick="renderMaterials('资产', this)">资产</button>
+                <button onclick="renderMaterials('经济', this)">经济</button>
+                <button onclick="renderMaterials('法律', this)">法律</button>
+                <button onclick="renderMaterials('财务', this)">财务</button>
+            </div>
+            <div class="material-file-row" style="font-weight:bold;background:#f5f7fa;color:var(--text-muted);">
+                <span></span><span>文件名称</span><span>文件类型</span><span>上传时间</span><span>解析状态</span><span>操作</span>
+            </div>
+            <div id="materials-list"></div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：新材料解析 ================= -->
+    <div id="view-material" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> > <span>新材料解析</span>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">材料解析报告</span>
+                <span class="tag status">解析完成，需人工确认</span>
+            </div>
+
+            <div class="grid-layout">
+                <div>
+                    <h3 style="font-size: 14px; margin-bottom: 12px;">文件信息</h3>
+                    <ul class="data-list" style="margin-bottom: 24px;">
+                        <li><span class="data-label">文件名</span><span class="data-value">关于地下车库产权的补充说明.pdf</span></li>
+                        <li><span class="data-label">上传时间</span><span class="data-value">2023-10-27 14:25</span></li>
+                        <li><span class="data-label">自动分类</span><span class="data-value">法律/权属证明文件</span></li>
+                    </ul>
+
+                    <h3 style="font-size: 14px; margin-bottom: 12px;">AI 提取关键信息</h3>
+                    <table style="margin-bottom: 24px;">
+                        <thead>
+                            <tr>
+                                <th>字段</th>
+                                <th>提取内容</th>
+                                <th>置信度</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>涉及资产</td>
+                                <td>星辉大厦地下3层车库</td>
+                                <td>98%</td>
+                            </tr>
+                            <tr>
+                                <td>面积</td>
+                                <td>约 5,000 平方米</td>
+                                <td>95%</td>
+                            </tr>
+                            <tr>
+                                <td>核心事实</td>
+                                <td>因早期规划变更未及时补办手续，目前尚未取得独立产权证。</td>
+                                <td>92%</td>
+                            </tr>
+                            <tr>
+                                <td>风险识别</td>
+                                <td><span class="tag high">高风险</span> 产权瑕疵</td>
+                                <td>90%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <h3 style="font-size: 14px; margin-bottom: 12px;">影响的报告模块</h3>
+                    <ul style="padding-left: 20px; line-height: 1.8; margin-bottom: 24px;">
+                        <li>【资产维度】 -> 【权属情况】 (结论与数据表)</li>
+                        <li>【资产维度】 -> 【可处置价值分析】 (估值模型输入项)</li>
+                    </ul>
+                </div>
+
+                <div style="border-left: 1px solid var(--border-gray); padding-left: 24px;">
+                    <div style="background: #f9fafb; padding: 16px; border: 1px solid var(--border-gray); border-radius: 2px;">
+                        <h4 style="margin-bottom: 12px; color: var(--ms-blue);">下一步操作</h4>
+                        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 16px;">系统已根据提取信息生成了报告更新草稿，请进行版本对比并确认是否写入正式报告。</p>
+                        <button class="btn btn-primary" style="width: 100%;" onclick="navTo('view-compare')">进入版本对比</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：版本对比 ================= -->
+    <div id="view-compare" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> > <span>待确认更新 (版本对比)</span>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">模块：【资产维度】 - 【权属情况】</span>
+                <span style="font-size: 12px; color: var(--text-muted);">触发文件: 《关于地下车库产权的补充说明.pdf》</span>
+            </div>
+
+            <div class="compare-container">
+                <!-- 原版本 -->
+                <div class="compare-col">
+                    <div class="compare-header">当前正式版本 (v4.1)</div>
+                    <div class="compare-body">
+                        <h4 style="margin-bottom: 8px;">结论摘要</h4>
+                        <p class="report-text">
+                            目标公司名下核心资产“星辉大厦”主体建筑（地上45层，地下1-2层）已取得完整的不动产权证书，产权清晰，无查封情况。
+                            <span class="diff-del">地下3层车库情况暂未提供证明文件，权属待核实。</span>
+                        </p>
+                        <h4 style="margin-bottom: 8px; margin-top: 16px;">风险判断</h4>
+                        <p class="report-text">
+                            <span class="tag low">低风险</span> 暂未发现重大权属瑕疵。
+                        </p>
+                    </div>
+                </div>
+
+                <!-- 新版本 -->
+                <div class="compare-col">
+                    <div class="compare-header" style="background: #f0fdf4; border-bottom-color: #bbf7d0;">系统建议更新 (Draft)</div>
+                    <div class="compare-body">
+                        <h4 style="margin-bottom: 8px;">结论摘要</h4>
+                        <p class="report-text">
+                            目标公司名下核心资产“星辉大厦”主体建筑（地上45层，地下1-2层）已取得完整的不动产权证书，产权清晰，无查封情况。
+                            <span class="diff-add">但地下3层车库（建筑面积约5,000平方米）因早期规划变更未及时补办手续，目前尚未取得独立产权证。</span>
+                        </p>
+                        <h4 style="margin-bottom: 8px; margin-top: 16px;">风险判断</h4>
+                        <p class="report-text">
+                            <span class="tag high diff-add">高风险</span> <span class="diff-add">地下车库无法确权可能导致该部分资产无法进行抵押融资或单独转让。</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-bar">
+                <button class="btn btn-outline" onclick="navTo('view-dashboard')">拒绝更新 (保留原版)</button>
+                <button class="btn btn-primary" onclick="confirmUpdate()">确认写入正式报告</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 二级窗口：资产雷达详情 ================= -->
+    <div id="view-asset-radar-detail" class="view">
+        <div class="breadcrumb"><span onclick="navTo('view-asset-radar')">资产雷达</span> &gt; <span id="radar-detail-bread">资产详情</span></div>
+        <div class="page-title"><h1 id="radar-detail-title">资产详情</h1><button class="btn btn-outline" onclick="navTo('view-asset-radar')">返回资产池</button></div>
+        <div class="radar-detail-grid">
+            <div>
+                <div class="radar-detail-box"><h3>LLM提取摘要</h3><p id="radar-detail-summary"></p></div>
+                <div class="radar-detail-box"><h3>抵质押物/权益</h3><p id="radar-detail-collateral"></p></div>
+                <div class="radar-detail-box"><h3>公告详情正文</h3><p id="radar-detail-text"></p></div>
+            </div>
+            <div>
+                <div class="radar-detail-box"><h3>基础信息</h3><div id="radar-detail-meta"></div></div>
+                <div class="radar-detail-box"><h3>附件与原件</h3><div id="radar-detail-attachments"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 一级窗口：资产雷达 ================= -->
+    <div id="view-asset-radar" class="view">
+        <div class="breadcrumb">
+            <span onclick="navTo('view-dashboard')">总控台</span> &gt; <span>资产雷达</span>
+        </div>
+
+        <div class="radar-hero">
+            <div>
+                <h1>资产雷达</h1>
+                <p>自动追踪债权转让、司法拍卖和资产处置公告，帮助你发现可跟进资产、关注价格变化、识别重新挂牌和拆分处置机会。</p>
+            </div>
+            <div class="mini-actions" style="margin-top:0;">
+                <button class="btn btn-primary" onclick="runRadarScan(this)">运行今日扫描</button>
+                <button class="btn btn-outline" onclick="renderRadarPool('trackable', document.querySelector('.asset-pool-tabs button:nth-child(2)'))">查看可追踪资产</button>
+            </div>
+        </div>
+
+        <div class="radar-kpis">
+            <div class="radar-kpi"><span class="overview-label">本次扫描资产数</span><strong id="radar-kpi-raw">0</strong><span class="metric-desc">最新一次扫描发现</span></div>
+            <div class="radar-kpi"><span class="overview-label">进入累计扫描资产数</span><strong id="radar-kpi-new">0</strong><span class="metric-desc">本次新增入池</span></div>
+            <div class="radar-kpi"><span class="overview-label">已累计扫描资产数</span><strong id="radar-kpi-cumulative">0</strong><span class="metric-desc">资产池累计总量</span></div>
+            <div class="radar-kpi"><span class="overview-label">扫描池</span><strong id="radar-kpi-scan">0</strong><span class="metric-desc">已抓取，待深度判断</span></div>
+            <div class="radar-kpi"><span class="overview-label">初筛资产库</span><strong id="radar-kpi-initial">0</strong><span class="metric-desc">通过宽口径筛选，无金额门槛</span></div>
+            <div class="radar-kpi"><span class="overview-label">可追踪资产库</span><strong id="radar-kpi-trackable">0</strong><span class="metric-desc">细筛得分 70 分以上</span></div>
+            <div class="radar-kpi"><span class="overview-label">待人工复核</span><strong id="radar-kpi-review">0</strong><span class="metric-desc">疑似重复或 50-69 分</span></div>
+            <div class="radar-kpi"><span class="overview-label">关注提醒</span><strong id="radar-kpi-alerts">0</strong><span class="metric-desc">降价、拆分、重新挂牌</span></div>
+        </div>
+
+        <div class="radar-main-grid">
+            <div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">资产池</span>
+                        <span class="tag medium">金额暂不设门槛</span>
+                    </div>
+                    <div class="radar-pool-toolbar">
+                        <div class="asset-pool-tabs">
+                            <button class="active" onclick="renderRadarPool('scan', this)">扫描池</button>
+                            <button onclick="renderRadarPool('initial', this)">初筛资产库</button>
+                            <button onclick="renderRadarPool('trackable', this)">可追踪资产库</button>
+                            <button onclick="renderRadarPool('review', this)">人工复核池</button>
+                        </div>
+                        <label class="radar-filter">来源
+                            <select id="radar-source-filter" onchange="setRadarSourceFilter(this.value)">
+                                <option value="all">全部来源</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="radar-table-wrap">
+                        <table class="radar-table">
+                            <thead>
+                                <tr>
+                                    <th>编号</th>
+                                    <th>资产/项目 <button class="radar-th-filter" data-field="name" onclick="openRadarColumnFilter(event, 'name')">▼</button></th>
+                                    <th>来源 <button class="radar-th-filter" data-field="source" onclick="openRadarColumnFilter(event, 'source')">▼</button></th>
+                                    <th>城市/区域 <button class="radar-th-filter" data-field="city" onclick="openRadarColumnFilter(event, 'city')">▼</button></th>
+                                    <th>抵质押物/权益 <button class="radar-th-filter" data-field="collateral" onclick="openRadarColumnFilter(event, 'collateral')">▼</button></th>
+                                    <th>状态 <button class="radar-th-filter" data-field="status" onclick="openRadarColumnFilter(event, 'status')">▼</button></th>
+                                    <th>节点判断 <button class="radar-th-filter" data-field="score" onclick="openRadarColumnFilter(event, 'score')">▼</button></th>
+                                    <th>关注 <button class="radar-th-filter" data-field="watched" onclick="openRadarColumnFilter(event, 'watched')">▼</button></th>
+                                </tr>
+                            </thead>
+                            <tbody id="radar-asset-rows"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">处置动态</span>
+                        <span class="tag status">今日更新</span>
+                    </div>
+                    <div class="timeline">
+                        <div class="timeline-item"><div class="timeline-date">尚未运行</div><div class="timeline-content">点击“运行今日扫描”后，这里会显示新增公告、重复资产更新和关注资产变化。</div></div>
+                    </div>
+                </div>
+
+                <div class="radar-progress-panel" id="radar-progress-panel">
+                    <div class="radar-progress-head">
+                        <strong>扫描进度</strong>
+                        <div class="radar-progress-meta">
+                            <span id="radar-progress-status">等待运行</span>
+                            <button class="radar-progress-close" id="radar-progress-close" onclick="closeRadarProgress()">关闭</button>
+                        </div>
+                    </div>
+                    <div class="radar-progress-summary">
+                        <div class="radar-progress-count">
+                            <span id="radar-progress-count">0/0</span>
+                            <span id="radar-progress-percent">0%</span>
+                        </div>
+                        <div class="radar-progress-track">
+                            <div class="radar-progress-fill" id="radar-progress-fill"></div>
+                        </div>
+                    </div>
+                    <div id="radar-progress-log" class="radar-progress-log">
+                        <div class="radar-progress-line"><span class="muted">ready</span> 等待点击“运行今日扫描”。</div>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">关注资产动态</span>
+                        <span class="tag high">重点提醒</span>
+                    </div>
+                    <div id="radar-alert-list">
+                        <div style="color:var(--text-muted);font-size:12px;line-height:1.8;">暂无关注资产动态。关注某个资产后，若出现降价、拆分、重新挂牌或新增拍卖轮次，会在这里提醒。</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">筛选口径</span>
+                        <span class="tag status">当前规则</span>
+                    </div>
+                    <ul class="compact-list">
+                        <li>金额暂不做准入限制，只用于展示和排序。</li>
+                        <li>同一资产多次公告或拍卖，更新原资产而不是重复入库。</li>
+                        <li>关注资产若出现降价、拆分、重新挂牌，会优先提醒。</li>
+                        <li>可追踪资产重点看实物抵押物、城市区位、处置进展和瑕疵复杂度。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</main>
+
+<div class="radar-scan-modal-mask" id="radarScanModal">
+    <div class="radar-scan-modal">
+        <h3>运行今日扫描</h3>
+        <div class="radar-scan-field">
+            <label>选择扫描来源</label>
+            <div class="radar-source-checks">
+                <label><input type="checkbox" id="radar-source-all" checked onchange="toggleRadarSourceAll()">所有来源</label>
+                <label><input type="checkbox" class="radar-source-option" value="citic_amc_asset_disposal" checked onchange="syncRadarSourceAll()">中信</label>
+                <label><input type="checkbox" class="radar-source-option" value="cinda_amc_asset_disposal" checked onchange="syncRadarSourceAll()">信达</label>
+                <label><input type="checkbox" class="radar-source-option" value="ali_auction" checked onchange="syncRadarSourceAll()">阿里法拍</label>
+                <label><input type="checkbox" class="radar-source-option" value="jd_auction" checked onchange="syncRadarSourceAll()">京东法拍</label>
+            </div>
+        </div>
+        <div class="radar-scan-field">
+            <label for="radar-scan-limit">扫描资产条数（本轮最多）</label>
+            <input id="radar-scan-limit" type="text" value="120" inputmode="numeric" placeholder="请输入数字">
+            <div class="radar-scan-error" id="radar-scan-error"></div>
+        </div>
+        <div class="radar-scan-actions">
+            <button class="btn btn-outline" onclick="closeRadarScanModal()">取消</button>
+            <button class="btn btn-primary" onclick="confirmRadarScan()">开始扫描</button>
+        </div>
+    </div>
+</div>
+<div class="radar-filter-menu" id="radarFilterMenu"></div>
+<div class="radar-toast" id="radarToast"></div>
+<button class="radar-backstage-entry" id="radarBackstageEntry" onclick="toggleRadarBackstage()"><span class="radar-backstage-dot"></span>后台运行</button>
+<div class="radar-backstage-panel" id="radarBackstagePanel">
+    <div class="radar-backstage-head">
+        <h3>后台运行查看</h3>
+        <button class="btn btn-outline" onclick="toggleRadarBackstage()">关闭</button>
+    </div>
+    <div class="section-heading">
+        <h2>运行流程</h2>
+        <span class="tag status">LangSmith trace: success</span>
+    </div>
+    <div class="radar-workflow">
+        <div class="radar-node"><h3>source_scan</h3><p>扫描 AMC 公告、司法拍卖和历史 Excel 样本。</p><span class="model-name">deepseek/deepseek-v4-pro</span></div>
+        <div class="radar-node"><h3>coarse_filter</h3><p>识别实物资产、股权、收费权、抵质押物。</p><span class="model-name">deepseek/deepseek-v4-pro</span></div>
+        <div class="radar-node"><h3>dedupe</h3><p>新资产入库；多次公告或拍卖更新原资产。</p><span class="model-name">简单: deepseek / 复杂: glm-5.2</span></div>
+        <div class="radar-node"><h3>detailed_screen</h3><p>按实物资产、区位、处置进展、瑕疵复杂度评分。</p><span class="model-name">anthropic/claude-opus-4.8</span></div>
+        <div class="radar-node"><h3>pool_update</h3><p>更新公告次数、拍卖次数、最新拍卖时间和状态。</p><span class="model-name">openai/gpt-4o-mini</span></div>
+        <div class="radar-node"><h3>interest_alert</h3><p>关注资产出现降价、拆分、重新挂牌时提醒。</p><span class="model-name">deepseek/deepseek-v4-pro</span></div>
+    </div>
+    <div class="radar-layout">
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Source Registry</span>
+                <span class="tag status">首版 source</span>
+            </div>
+            <div class="source-grid">
+                <div class="source-card"><strong>中信 AMC</strong><span>资产处置公告；债权、抵押物、处置机构抽取。</span></div>
+                <div class="source-card"><strong>信达 AMC</strong><span>资产处置公告；每日循环扫描。</span></div>
+                <div class="source-card"><strong>阿里法拍</strong><span>司法拍卖；拍卖轮次、降价和状态追踪。</span></div>
+                <div class="source-card"><strong>京东法拍</strong><span>司法拍卖；补充拍卖平台覆盖。</span></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">模型路由</span>
+            </div>
+            <div class="model-route-row"><span>source_scan</span><strong>deepseek/deepseek-v4-pro</strong></div>
+            <div class="model-route-row"><span>coarse_filter</span><strong>deepseek/deepseek-v4-pro</strong></div>
+            <div class="model-route-row"><span>dedupe 简单</span><strong>deepseek/deepseek-v4-pro</strong></div>
+            <div class="model-route-row"><span>dedupe 复杂</span><strong>z-ai/glm-5.2</strong></div>
+            <div class="model-route-row"><span>detailed_screen</span><strong>anthropic/claude-opus-4.8</strong></div>
+            <div class="model-route-row"><span>pool_update</span><strong>openai/gpt-4o-mini</strong></div>
+            <div class="model-route-row"><span>interest_alert</span><strong>deepseek/deepseek-v4-pro</strong></div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">最近运行</span>
+            <span class="tag status">success</span>
+        </div>
+        <ul class="compact-list">
+            <li>2026-07-10 11:36：CherryIN connectivity test 成功。</li>
+            <li>2026-07-10 11:16：Excel 样本 demo 上报 LangSmith。</li>
+            <li>12 条人工标注样本，去重后形成 6 个可追踪资产。</li>
+        </ul>
+        <div class="mini-actions">
+            <button class="btn btn-outline" onclick="window.open('https://smith.langchain.com/o/1603f6ae-a220-409d-b48d-c28f1817f39a/projects/p/9d5f165c-bef9-4bb8-882f-e3da1ea31491','_blank')">打开 trace</button>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 侧边抽屉：源文件证据 ================= -->
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer-evidence">
+    <div class="drawer-header">
+        <span class="drawer-title">源文件证据追溯</span>
+        <span class="drawer-close" onclick="closeDrawer()">&times;</span>
+    </div>
+    <div class="drawer-body">
+        <div style="margin-bottom: 16px;">
+            <div style="font-size: 16px; font-weight: bold; color: var(--ms-blue); margin-bottom: 4px;" id="drawer-filename">文件名.pdf</div>
+            <div style="font-size: 12px; color: var(--text-muted);">定位: <span id="drawer-location">第X页</span></div>
+        </div>
+
+        <div class="pdf-preview-mock">
+            <div class="pdf-page">
+                <div style="font-size: 14px; font-weight: bold; text-align: center; margin-bottom: 20px;">补充说明</div>
+                <p>致：相关方</p>
+                <p style="line-height: 2;">关于星辉大厦项目，现就相关事项说明如下：</p>
+                <p style="line-height: 2; position: relative;">
+                    <span class="highlight-box" style="top: 0; left: 0; width: 100%; height: 100%;"></span>
+                    我司开发建设的星辉大厦项目，其地下3层车库（建筑面积5012.5平方米），因在建设初期进行了内部规划调整，未能及时向规自委报备。导致该部分在整体竣工验收时未能一并办理不动产权登记。目前该部分资产尚未取得独立产权证。
+                </p>
+                <p style="line-height: 2;">特此说明。</p>
+                <p style="text-align: right; margin-top: 40px;">星辉置业有限公司<br>2023年10月20日</p>
+            </div>
+        </div>
+
+        <div style="background: #f9fafb; padding: 12px; border: 1px solid var(--border-gray);">
+            <h4 style="font-size: 12px; margin-bottom: 8px; color: var(--text-muted);">AI 提取摘要</h4>
+            <p style="font-size: 13px;" id="drawer-summary">摘要内容...</p>
+        </div>
+
+        <div style="margin-top: 24px;">
+            <h4 style="font-size: 12px; margin-bottom: 8px; color: var(--text-muted);">支撑的报告结论</h4>
+            <ul style="font-size: 12px; padding-left: 16px; line-height: 1.6;">
+                <li>【资产维度-权属情况】: 地下3层车库尚未取得独立产权证。</li>
+            </ul>
+        </div>
+
+        <button class="btn btn-outline" style="width: 100%; margin-top: 24px;">在新窗口打开原文件</button>
+    </div>
+</div>
+
+
+<!-- ================= AI 对话助手 ================= -->
+<button class="ai-fab" onclick="toggleAiPanel()" title="项目尽调助手">✦</button>
+<div class="ai-panel" id="aiPanel">
+    <div class="ai-top">
+        <div>
+            <strong>项目尽调助手</strong>
+            <span style="font-size:12px;color:var(--text-muted);margin-left:10px;">当前上下文：<span id="aiContextLabel">当前页面</span></span>
+        </div>
+        <button onclick="toggleAiPanel()" style="background:transparent;font-size:20px;color:var(--text-muted);">&times;</button>
+    </div>
+    <div class="ai-body">
+        <div class="ai-chat" id="aiChat">
+            <div class="ai-welcome">✦ 你好，我是 Credit OS 尽调助手</div>
+            <div class="ai-msg assistant">你可以问我报告结论、查来源、找风险、列待核实问题或测算新材料影响。每个关键结论都会附带“查看来源”。</div>
+        </div>
+        <div class="ai-sources">
+            <div style="font-weight:bold;margin-bottom:10px;color:var(--ms-blue);">引用来源</div>
+            <div class="source-card"><strong>不动产权证书.pdf</strong><br>资产-权属情况<br><a onclick="openDrawer('不动产权证书.pdf','第1-2页','主体建筑产权归属及抵押状态。')">查看来源</a></div>
+            <div class="source-card"><strong>补充协议.pdf</strong><br>法律-交易结构<br><a onclick="openDrawer('补充协议.pdf','第4.1条','回购义务与交割条件变化。')">查看来源</a></div>
+            <div class="source-card"><strong>债务明细表.xlsx</strong><br>财务-债务结构<br><a onclick="openDrawer('债务明细表.xlsx','Sheet1 B2:H28','债务本金、利息、到期日及担保方式。')">查看来源</a></div>
+        </div>
+    </div>
+    <div class="ai-input-zone">
+        <div class="context-switch">
+            <button class="active" onclick="setAiContext(this,'当前页面')">当前页面</button>
+            <button onclick="setAiContext(this,'全部报告')">全部报告</button>
+            <button onclick="setAiContext(this,'源文件库')">源文件库</button>
+        </div>
+        <div class="ai-input-row">
+            <input id="aiInput" placeholder="输入问题，例如：这个项目最大的处置障碍是什么？" onkeydown="if(event.key==='Enter') sendAiMessage()">
+            <button class="send-btn" onclick="sendAiMessage()">↑</button>
+        </div>
+        <div class="quick-actions">
+            <button onclick="quickAsk('问报告')">+ 问报告</button>
+            <button onclick="quickAsk('查来源')">查来源</button>
+            <button onclick="quickAsk('找风险')">找风险</button>
+            <button onclick="quickAsk('列问题')">列问题</button>
+            <button onclick="quickAsk('测影响')">测影响</button>
+            <button onclick="quickAsk('更多')">更多</button>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 弹窗：上传材料 ================= -->
+<div class="modal-overlay" id="modal-upload">
+    <div class="modal-content">
+        <div class="modal-header">
+            <span style="font-weight: bold; font-size: 16px;">补充尽调材料</span>
+            <span style="cursor: pointer; font-size: 18px; color: var(--text-muted);" onclick="closeUploadModal()">&times;</span>
+        </div>
+        <div class="modal-body">
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 16px;">系统将自动解析上传的文件，提取关键数据并比对现有报告内容。</p>
+
+            <div class="upload-area" onclick="simulateUpload()">
+                <div style="font-size: 32px; color: var(--ms-blue); margin-bottom: 12px;">&#128194;</div>
+                <div style="font-size: 14px; font-weight: bold; margin-bottom: 4px;">点击或拖拽文件到此处上传</div>
+                <div style="font-size: 12px; color: var(--text-light);">支持 PDF, Word, Excel, 扫描件 (自动OCR)</div>
+            </div>
+
+            <div class="progress-bar" id="upload-progress">
+                <div class="progress-fill" id="upload-fill"></div>
+            </div>
+            <div id="upload-status" style="font-size: 12px; text-align: center; margin-top: 8px; color: var(--ms-blue); display: none;">正在解析文件...</div>
+        </div>
+    </div>
+</div>
+
+<script>
+
+    const dimensionData = {
+        '资产维度': {
+            one: '资产：有什么、权属是否清楚、能不能处置。', riskClass: 'high', risk: '高风险', updated: '最近更新: 2023-10-27', impact: '新材料影响：3个模块', confirm: '待确认：3项',
+            judgement: '资产范围基本完整，但权属、抵押及证照瑕疵对后续处置构成实质约束。',
+            summary: '重点核验土地、房产、在建工程、车位、商业及可售住宅等资产是否真实存在、证照是否完整、是否可售或可处置。地下车库未确权、部分商业已抵押，需在估值和交易条件中扣减或设置先决条件。',
+            metrics: [['土地面积','62,400㎡','项目红线内土地面积，决定开发强度与处置边界。'],['建筑面积','182,000㎡','已建、未建及可售资产合计口径。'],['证照完整度','78%','土地、规划、施工、预售等关键证照取得比例。'],['可处置金额','¥31.6亿','扣除受限资产和折价后的可回收价值。']],
+            topics: [
+                ['资产清单','土地、房产、在建工程、车位、商业及可售住宅已形成台账，部分车位权属待核。','数量 7类 / 面积18.2万㎡ / 可处置率74%','medium','2'],
+                ['权属情况','主体房产证照较完整，地下车库及部分配套用房存在登记瑕疵。','已取得证照 12份 / 缺失3份 / 瑕疵2项','high','3'],
+                ['抵押/质押/查封情况','商业裙楼抵押给银行，未发现重复抵押，但抵押范围需与资产清单复核。','抵押金额¥8.4亿 / 受限面积3.6万㎡','medium','1'],
+                ['规划与建设指标','计容建面与现有资产台账存在约2.8%的口径差异。','容积率3.2 / 已建14.8万㎡ / 未建3.4万㎡','medium','2'],
+                ['资产瑕疵与处置障碍','证照不全、拆迁尾项及工程停滞将影响资产包整体处置。','障碍5项 / 高风险2项','high','4'],
+                ['可处置价值分析','考虑抵押优先受偿和快速处置折扣后，可回收价值需下修。','估值¥42.5亿 / 折价率25%','medium','2']
+            ],
+            files: ['不动产权证书、土地证、规划许可证', '施工许可证、预售许可证、竣工验收备案', '抵押登记证明、查封查询回执、资产评估报告'],
+            questions: ['地下车库能否补办产权证，周期和费用是多少？','抵押资产范围是否覆盖核心可售资产？','资产台账与规划指标差异的形成原因是什么？'],
+            updates: ['v4.2 新增地下车库未确权证据，风险升为高。','v4.1 更新商业裙楼抵押登记信息。','v4.0 完成资产清单与证照台账匹配。']
+        },
+        '经济维度': {
+            one: '经济：值多少钱、卖不卖得动、价格假设是否可靠。', riskClass: 'medium', risk: '中风险', updated: '最近更新: 2023-10-26', impact: '新材料影响：2个模块', confirm: '待确认：2项',
+            judgement: '货值测算依赖较乐观的价格和去化假设，需用周边竞品和历史成交重新校准。',
+            summary: '重点判断总货值、剩余货值、销售去化和回款节奏是否可靠。若单价下降10%且去化周期延长6个月，项目清偿率和资金周转将明显承压。',
+            metrics: [['总货值','¥56.8亿','按当前价格假设测算的全口径货值。'],['剩余货值','¥38.2亿','尚未销售或尚未确认收入的存量货值。'],['去化率','41%','已售面积占可售面积比例，反映销售速度。'],['预计回款','¥32.4亿','按去化节奏和付款条件预测的现金流入。']],
+            topics: [
+                ['货值总览','总货值按商业、住宅、车位拆分，剩余货值占比较高。','总货值¥56.8亿 / 未售¥38.2亿','medium','1'],
+                ['平均单价与价格假设','未售均价较近三个月竞品成交高出8%，存在乐观假设。','已售2.9万/㎡ / 假设3.35万/㎡','high','2'],
+                ['销售去化情况','历史去化节奏放缓，网签存在阶段性异常。','已售6.4万㎡ / 未售9.1万㎡ / 去化率41%','medium','2'],
+                ['市场对标','周边库存上升，成交周期拉长，对价格形成压制。','竞品7个 / 库存18个月 / 折扣率12%','medium','1'],
+                ['回款预测','回款高峰晚于债务到期节点，需关注现金流错配。','12个月回款¥11.6亿 / 缺口¥4.3亿','high','3'],
+                ['敏感性分析','单价下降10%将减少净回收约4.1亿元。','-5%/-10%/-15% 三情景','medium','1']
+            ],
+            files: ['销售台账、网签明细、价格审批表', '周边竞品调研、市场成交数据库', '回款预测模型、敏感性测算表'],
+            questions: ['未售价格假设是否有真实成交支撑？','低价成交和退房记录是否完整纳入？','去化周期拉长对债务清偿时间表影响多大？'],
+            updates: ['v4.2 根据竞品成交下调未售均价假设。','v4.1 新增主力商业退租对回款影响。','v4.0 完成货值口径拆分。']
+        },
+        '法律维度': {
+            one: '法律：关系是否合法有效、权利顺位和风险在哪里。', riskClass: 'high', risk: '高风险', updated: '最近更新: 2023-10-25', impact: '新材料影响：4个模块', confirm: '待确认：5项',
+            judgement: '交易结构可识别，但补充协议、担保顺位及执行案件可能改变权利实现路径。',
+            summary: '重点审查主体、股权、合同、债权债务、担保和诉讼执行关系是否有效。需关注回购义务、交割条件、优先权冲突和历史纠纷对交易推进的影响。',
+            metrics: [['合同数量','46份','纳入审查的股转、合作、借款、担保等合同总数。'],['重大合同金额','¥24.7亿','涉及付款、债权、担保和回购义务的合同金额。'],['诉讼金额','¥3.8亿','未决诉讼、仲裁和执行案件标的金额。'],['高风险条款','7条','可能影响交割、清偿或处置的关键条款。']],
+            topics: [
+                ['主体与股权结构','项目公司、股东及实控人链条基本清楚，存在一项代持传闻待核。','主体12个 / 股权变更5次','medium','2'],
+                ['交易结构与合同安排','股转、合作开发及补充协议形成复合交易结构，回购条款需重点审查。','重大合同18份 / 解除条件4项','high','4'],
+                ['债权债务法律关系','债权形成文件基本齐备，但部分罚息口径存在争议。','债权确认¥16.2亿 / 争议¥0.9亿','medium','2'],
+                ['担保与权利限制','抵押登记有效，但存在工程款优先权及查封顺位冲突风险。','担保6项 / 限制转让3项','high','3'],
+                ['诉讼/仲裁/执行','两起执行案件可能影响核心资产处置窗口。','案件5起 / 执行金额¥2.1亿','high','2'],
+                ['法律风险与待核实事项','合同效力、审批缺失、历史纠纷需形成专项核查清单。','待核实问题11项','medium','5']
+            ],
+            files: ['股权转让协议、合作开发协议、四方协议', '借款合同、债权确认书、担保合同', '裁判文书、执行裁定、查封冻结回执'],
+            questions: ['补充协议是否改变原交易对价和回购义务？','工程款优先受偿权是否优先于抵押权？','执行案件是否会阻碍资产过户或处置？'],
+            updates: ['v4.2 新增补充协议导致交易结构风险上调。','v4.1 更新两起执行案件进展。','v4.0 完成合同义务抽取。']
+        },
+        '财务维度': {
+            one: '财务：欠多少钱、还要投多少钱、最终能回多少钱。', riskClass: 'medium', risk: '中风险', updated: '最近更新: 2023-10-24', impact: '新材料影响：3个模块', confirm: '待确认：4项',
+            judgement: '总负债和后续投入压力较高，净回收对税费、工程续建成本和销售回款高度敏感。',
+            summary: '重点回答债务规模、利息罚息、后续投入、税费、清偿率和资金缺口。若按清算折价与工程续建成本重估，项目存在约4-6亿元资金缺口。',
+            metrics: [['总负债','¥29.4亿','债务本金、利息、罚息及其他应付款合计。'],['尚需投入','¥6.8亿','续建、拆迁、营销和管理等后续资金需求。'],['预计税费','¥3.1亿','增值税、土增税、所得税及附加税估算。'],['清偿率','82%','可回收现金对优先及普通债务的覆盖比例。']],
+            topics: [
+                ['债务结构','金融债务、工程欠款、股东借款和其他应付款需分层清偿。','本金¥22.6亿 / 利罚¥6.8亿','high','3'],
+                ['成本费用','待发生成本中工程续建和拆迁尾款不确定性最高。','已投¥18.5亿 / 待投¥6.8亿','medium','2'],
+                ['现金流与回款','账面资金不足以覆盖短期债务，依赖销售回款和过桥安排。','账面¥0.8亿 / 12月回款¥11.6亿','high','4'],
+                ['税费测算','土增税和所得税对净回收形成明显影响。','预计税费¥3.1亿 / 敏感项2个','medium','2'],
+                ['清偿测算','不同处置情景下债权人清偿率从68%至91%不等。','基准清偿率82%','medium','1'],
+                ['资金缺口与收益测算','在保守情景下需新增资金约5.2亿元。','缺口¥5.2亿 / IRR 6.4%','high','3']
+            ],
+            files: ['债务明细表、银行对账单、借款合同', '成本测算表、工程进度款台账', '税费测算底稿、现金流模型、清偿分配表'],
+            questions: ['罚息是否持续计提，是否可谈判减免？','续建成本是否包含停工索赔和材料涨价？','税费口径是否经税务顾问复核？'],
+            updates: ['v4.2 根据债务明细表更新罚息口径。','v4.1 新增清偿率三情景测算。','v4.0 完成现金流模型搭建。']
+        }
+    };
+
+    function renderDimension(dimTitle) {
+        const d = dimensionData[dimTitle] || dimensionData['资产维度'];
+        document.getElementById('dim-title').innerText = dimTitle;
+        document.getElementById('dim-title-bread').innerText = dimTitle;
+        document.getElementById('dim-one-liner').innerText = d.one;
+        document.getElementById('dim-updated').innerText = d.updated;
+        document.getElementById('dim-judgement').innerText = d.judgement;
+        document.getElementById('dim-summary-text').innerText = d.summary;
+        const risk=document.getElementById('dim-risk'); risk.className='tag '+d.riskClass; risk.innerText=d.risk;
+        document.getElementById('dim-impact').innerText=d.impact;
+        document.getElementById('dim-confirm').innerText=d.confirm;
+        d.metrics.forEach((m,i)=>{document.getElementById('metric-label-'+(i+1)).innerText=m[0];document.getElementById('metric-value-'+(i+1)).innerText=m[1];document.getElementById('metric-desc-'+(i+1)).innerText=m[2] || '';});
+        document.getElementById('topic-grid').innerHTML = d.topics.map((t,idx)=>`<div class="card dim-card"><div class="card-header"><span class="card-title">${t[0]}</span><span class="tag ${t[3]}">${t[3]==='high'?'高风险':t[3]==='medium'?'中风险':'低风险'}</span></div><div class="dim-summary">${t[1]}</div><ul class="data-list detail-only"><li><span class="data-label">关键指标</span><span class="data-value">${t[2]}</span></li><li><span class="data-label">待核实事项</span><span class="data-value">${t[4]}项</span></li></ul><div class="mini-chart"><span style="height:${30+idx*5}px"></span><span style="height:${48-idx*3}px"></span><span style="height:${24+idx*6}px"></span><span style="height:${58-idx*2}px"></span></div><div class="topic-actions"><button class="btn btn-primary" onclick="navTo('view-topic')">查看专题</button><button class="btn btn-outline" onclick="openDrawer('${t[0]}_来源文件.pdf','第${idx+1}页','${t[0]}的关键来源证据与数据口径。')">查看来源</button></div></div>`).join('');
+        document.getElementById('dim-files').innerHTML=d.files.map(x=>`<li>${x}</li>`).join('');
+        document.getElementById('dim-questions').innerHTML=d.questions.map(x=>`<li>${x}</li>`).join('');
+        document.getElementById('dim-updates').innerHTML=d.updates.map(x=>`<li>${x}</li>`).join('');
+        document.getElementById('aiContextLabel').innerText = dimTitle;
+    }
+
+    function toggleSection(sectionId, toggleId) {
+        const section = document.getElementById(sectionId);
+        const toggle = document.getElementById(toggleId);
+        if (!section || !toggle) return;
+        const collapsed = section.classList.toggle('collapsed');
+        toggle.innerText = collapsed ? '▶' : '▼';
+    }
+
+    const RADAR_API_BASE = window.RADAR_API_BASE || 'http://127.0.0.1:8030';
+    const radarAssets = { scan: [], initial: [], trackable: [], review: [] };
+    let radarProgressTimer = null;
+    let radarCurrentRunId = null;
+    let radarScanActive = false;
+    let radarStopRequested = false;
+    let radarScanButtonText = '运行今日扫描';
+    let radarCurrentPool = 'scan';
+    let radarSourceFilter = 'all';
+    let radarPendingScanButton = null;
+    const radarColumnFilters = { name: 'all', source: 'all', city: 'all', collateral: 'all', status: 'all', score: 'all', watched: 'all' };
+    const radarColumnLabels = {
+        name: '资产/项目',
+        source: '来源',
+        city: '城市/区域',
+        collateral: '抵质押物/权益',
+        status: '状态',
+        score: '节点判断',
+        watched: '关注'
+    };
+
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[ch]));
+    }
+
+    function buildFallbackDetailSections(asset) {
+        const text = asset.detail_text || asset.summary || asset.collateral || '';
+        const chunks = String(text).replace(/\s+/g, ' ').match(/.{1,260}/g) || [];
+        const sections = [];
+        if (asset.summary) sections.push({ title: '项目概览', content: asset.summary });
+        if (asset.collateral) sections.push({ title: '标的/抵质押物', content: asset.collateral });
+        if (chunks.length) sections.push({ title: '原文线索', content: chunks.slice(0, 4).join('\n\n') });
+        return sections.length ? sections : [{ title: '公告详情正文', content: '暂无详情正文' }];
+    }
+
+    function renderDetailSections(asset) {
+        const sections = (asset.detail_sections && asset.detail_sections.length) ? asset.detail_sections : buildFallbackDetailSections(asset);
+        return sections.map(section => `
+            <div class="radar-detail-section">
+                <h4>${escapeHtml(section.title || '详情')}</h4>
+                <p>${escapeHtml(section.content || '')}</p>
+            </div>
+        `).join('');
+    }
+
+    function getRadarColumnValue(asset, field) {
+        if (field === 'watched') return asset.watched ? '已关注' : '未关注';
+        const value = asset[field];
+        return String(value || '-');
+    }
+
+    function rowPassesRadarFilters(asset) {
+        if (radarSourceFilter !== 'all' && (asset.source || '-') !== radarSourceFilter) return false;
+        return Object.entries(radarColumnFilters).every(([field, value]) => {
+            if (value === 'all') return true;
+            return getRadarColumnValue(asset, field) === value;
+        });
+    }
+
+    function refreshRadarHeaderFilterState() {
+        document.querySelectorAll('.radar-th-filter').forEach(btn => {
+            const field = btn.getAttribute('data-field');
+            btn.classList.toggle('active', field && radarColumnFilters[field] && radarColumnFilters[field] !== 'all');
+        });
+    }
+
+    function renderRadarPool(pool = 'initial', btn = null) {
+        radarCurrentPool = pool;
+        document.querySelectorAll('.asset-pool-tabs button').forEach(b => b.classList.remove('active'));
+        if (btn) btn.classList.add('active');
+        updateRadarSourceFilterOptions(pool);
+        refreshRadarHeaderFilterState();
+        const target = document.getElementById('radar-asset-rows');
+        if (!target) return;
+        const allRows = radarAssets[pool] || [];
+        const rows = allRows.filter(rowPassesRadarFilters);
+        if (!rows.length) {
+            target.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:32px;">${allRows.length ? '当前来源筛选下暂无资产。' : '资产池为空。点击“运行今日扫描”后，符合条件的资产会进入这里。'}</td></tr>`;
+            return;
+        }
+        target.innerHTML = rows.map((asset, index) => `
+            <tr>
+                <td style="color:var(--text-muted);font-weight:700;">${index + 1}</td>
+                <td><div class="asset-name" onclick="openRadarAssetDetailById('${pool}', '${asset.asset_id}')">${escapeHtml(asset.name)}</div><div style="color:var(--text-muted);font-size:11px;">${pool === 'scan' ? '扫描池' : pool === 'trackable' ? '可追踪资产库' : pool === 'review' ? '人工复核池' : '初筛资产库'}</div></td>
+                <td>${escapeHtml(asset.source || '-')}</td>
+                <td>${escapeHtml(asset.city || '-')}</td>
+                <td>${escapeHtml(asset.collateral || '-')}</td>
+                <td><span class="tag ${String(asset.status || '').includes('复核') || String(asset.status || '').includes('跟进') ? 'medium' : 'status'}">${escapeHtml(asset.status)}</span></td>
+                <td>${escapeHtml(asset.score)}</td>
+                <td><button class="watch-btn ${asset.watched ? 'active' : ''}" onclick="toggleRadarInterestById('${pool}', '${asset.asset_id}')">${asset.watched ? '已关注' : '关注'}</button></td>
+            </tr>
+        `).join('');
+    }
+
+    function updateRadarSourceFilterOptions(pool = radarCurrentPool) {
+        const select = document.getElementById('radar-source-filter');
+        if (!select) return;
+        const sources = [...new Set((radarAssets[pool] || []).map(asset => asset.source || '-'))].sort();
+        if (radarSourceFilter !== 'all' && !sources.includes(radarSourceFilter)) {
+            radarSourceFilter = 'all';
+        }
+        select.innerHTML = `<option value="all">全部来源</option>` + sources.map(source => (
+            `<option value="${escapeHtml(source)}" ${source === radarSourceFilter ? 'selected' : ''}>${escapeHtml(source)}</option>`
+        )).join('');
+        select.value = radarSourceFilter;
+    }
+
+    function setRadarSourceFilter(source) {
+        radarSourceFilter = source || 'all';
+        renderRadarPool(radarCurrentPool, document.querySelector('.asset-pool-tabs button.active'));
+    }
+
+    function openRadarColumnFilter(event, field) {
+        event.stopPropagation();
+        const menu = document.getElementById('radarFilterMenu');
+        if (!menu) return;
+        const rows = radarAssets[radarCurrentPool] || [];
+        const values = [...new Set(rows.map(asset => getRadarColumnValue(asset, field)))].filter(Boolean).sort();
+        const current = radarColumnFilters[field] || 'all';
+        const options = ['all', ...values].slice(0, 101);
+        menu.innerHTML = `
+            <h4>${escapeHtml(radarColumnLabels[field] || '筛选')}</h4>
+            ${options.map(value => {
+                const label = value === 'all' ? '全部' : value;
+                const shortLabel = label.length > 46 ? `${label.slice(0, 46)}...` : label;
+                return `<button class="radar-filter-option ${value === current ? 'active' : ''}" title="${escapeHtml(label)}" onclick="setRadarColumnFilter('${field}', decodeURIComponent('${encodeURIComponent(value)}'))">${escapeHtml(shortLabel)}</button>`;
+            }).join('')}
+        `;
+        const rect = event.currentTarget.getBoundingClientRect();
+        menu.style.left = `${Math.min(rect.left, window.innerWidth - 280)}px`;
+        menu.style.top = `${rect.bottom + 6}px`;
+        menu.classList.add('open');
+    }
+
+    function setRadarColumnFilter(field, value) {
+        radarColumnFilters[field] = value || 'all';
+        const menu = document.getElementById('radarFilterMenu');
+        if (menu) menu.classList.remove('open');
+        renderRadarPool(radarCurrentPool, document.querySelector('.asset-pool-tabs button.active'));
+    }
+
+    document.addEventListener('click', event => {
+        const menu = document.getElementById('radarFilterMenu');
+        if (menu && !menu.contains(event.target) && !event.target.classList?.contains('radar-th-filter')) {
+            menu.classList.remove('open');
+        }
+    });
+
+    function toggleRadarInterest(pool, index) {
+        const asset = radarAssets[pool] && radarAssets[pool][index];
+        if (!asset) return;
+        asset.watched = !asset.watched;
+        renderRadarPool(pool, document.querySelector('.asset-pool-tabs button.active'));
+        showRadarToast(asset.watched ? `已关注：${asset.name}<br>后续出现降价、拆分、重新挂牌或新增拍卖轮次时将重点提醒。` : `已取消关注：${asset.name}`);
+        document.getElementById('radar-kpi-alerts').innerText = String(countRadarWatched());
+    }
+
+    function toggleRadarInterestById(pool, assetId) {
+        const rows = radarAssets[pool] || [];
+        const index = rows.findIndex(asset => asset.asset_id === assetId);
+        if (index >= 0) toggleRadarInterest(pool, index);
+    }
+
+    function countRadarWatched() {
+        return Object.values(radarAssets).flat().filter(asset => asset.watched).length;
+    }
+
+    function openRadarAssetDetail(pool, index) {
+        const asset = radarAssets[pool] && radarAssets[pool][index];
+        if (!asset) return;
+        document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+        document.getElementById('view-asset-radar-detail').classList.add('active');
+        window.scrollTo(0, 0);
+        document.getElementById('radar-detail-title').innerText = asset.name || '资产详情';
+        document.getElementById('radar-detail-bread').innerText = asset.name || '资产详情';
+        document.getElementById('radar-detail-summary').innerText = asset.summary || '暂无LLM摘要';
+        document.getElementById('radar-detail-collateral').innerText = asset.collateral || '暂无抵质押物/权益信息';
+        document.getElementById('radar-detail-text').innerHTML = renderDetailSections(asset);
+        document.getElementById('radar-detail-meta').innerHTML = `
+            <div>城市/区域：${escapeHtml(asset.city || '-')}</div>
+            <div>公告来源：${escapeHtml(asset.source || '-')}</div>
+            <div>状态：${escapeHtml(asset.status || '-')}</div>
+            <div>节点判断：${escapeHtml(asset.score || '-')}</div>
+            <div>原文链接：${asset.original_url ? `<a href="${asset.original_url}" target="_blank">查看公告原文</a>` : '-'}</div>
+        `;
+        const attachments = asset.attachments || [];
+        document.getElementById('radar-detail-attachments').innerHTML = attachments.length
+            ? attachments.map(att => {
+                const href = att.local_path || att.url || '';
+                const label = escapeHtml(att.name || '附件原件');
+                const body = escapeHtml(att.text || att.error || (att.local_path ? '附件已保存，可点击查看原件；正文抽取待OCR/Office解析。' : '附件未能保存到本地，请打开公告原文核验。'));
+                const link = href
+                    ? `<a href="${escapeHtml(href)}" target="_blank">${label}</a>`
+                    : `<strong>${label}</strong>`;
+                return `<div class="attachment-row">${link}<div>${body}</div></div>`;
+            }).join('')
+            : '<div style="color:var(--text-muted);font-size:12px;">暂无附件。</div>';
+        ensureRadarDetailSections(pool, asset.asset_id);
+    }
+
+    function openRadarAssetDetailById(pool, assetId) {
+        const rows = radarAssets[pool] || [];
+        const index = rows.findIndex(asset => asset.asset_id === assetId);
+        if (index >= 0) openRadarAssetDetail(pool, index);
+    }
+
+    async function ensureRadarDetailSections(pool, assetId) {
+        if (!assetId) return;
+        const rows = radarAssets[pool] || [];
+        const asset = rows.find(item => item.asset_id === assetId);
+        if (!asset || (asset.detail_sections && asset.detail_sections.length)) return;
+        const detailEl = document.getElementById('radar-detail-text');
+        if (detailEl) {
+            detailEl.insertAdjacentHTML('afterbegin', '<div class="radar-detail-section"><h4>DeepSeek整理中</h4><p>正在把公告正文整理成可读结构，完成后会自动刷新本页内容。</p></div>');
+        }
+        try {
+            const res = await fetch(`${RADAR_API_BASE}/api/radar/asset-detail?asset_id=${encodeURIComponent(assetId)}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const updated = await res.json();
+            Object.assign(asset, updated);
+            const activeTitle = document.getElementById('radar-detail-title')?.innerText;
+            if (activeTitle === asset.name && detailEl) {
+                document.getElementById('radar-detail-summary').innerText = asset.summary || '暂无LLM摘要';
+                document.getElementById('radar-detail-collateral').innerText = asset.collateral || '暂无抵质押物/权益信息';
+                detailEl.innerHTML = renderDetailSections(asset);
+            }
+        } catch (err) {
+            appendRadarProgress({ stage: 'detail', message: `详情整理暂未完成：${err.message || err}` });
+        }
+    }
+
+    function applyRadarPayload(payload) {
+        const pools = payload.pools || {};
+        radarAssets.scan = pools.scan || [];
+        radarAssets.initial = pools.initial || [];
+        radarAssets.trackable = pools.trackable || [];
+        radarAssets.review = pools.review || [];
+        const kpis = payload.kpis || {};
+        document.getElementById('radar-kpi-raw').innerText = String(kpis.raw || 0);
+        document.getElementById('radar-kpi-new').innerText = String(kpis.new || 0);
+        document.getElementById('radar-kpi-cumulative').innerText = String(kpis.cumulative || 0);
+        document.getElementById('radar-kpi-scan').innerText = String(kpis.scan || 0);
+        document.getElementById('radar-kpi-initial').innerText = String(kpis.initial || 0);
+        document.getElementById('radar-kpi-trackable').innerText = String(kpis.trackable || 0);
+        document.getElementById('radar-kpi-review').innerText = String(kpis.review || 0);
+        document.getElementById('radar-kpi-alerts').innerText = String(kpis.alerts || countRadarWatched());
+        const alertList = document.getElementById('radar-alert-list');
+        const alerts = payload.alerts || [];
+        if (alertList) {
+            alertList.innerHTML = alerts.length
+                ? alerts.map(item => `<div class="radar-alert">${item}</div>`).join('')
+                : '<div style="color:var(--text-muted);font-size:12px;line-height:1.8;">暂无关注资产动态。关注某个资产后，若出现降价、拆分、重新挂牌或新增拍卖轮次，会在这里提醒。</div>';
+        }
+        renderRadarPool(radarCurrentPool, document.querySelector('.asset-pool-tabs button.active'));
+    }
+
+    async function loadRadarAssets() {
+        try {
+            const res = await fetch(`${RADAR_API_BASE}/api/radar/assets`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            applyRadarPayload(await res.json());
+        } catch (err) {
+            applyRadarPayload({ kpis: { raw: 0, new: 0, cumulative: 0, scan: 0, initial: 0, trackable: 0, review: 0, alerts: 0 }, pools: { scan: [], initial: [], trackable: [], review: [] }, alerts: [] });
+            showRadarToast(`后台服务未连接：${err.message || err}`);
+        }
+    }
+
+    async function runRadarScan(btn) {
+        if (radarScanActive && radarCurrentRunId) {
+            await stopRadarScan(btn);
+            return;
+        }
+        radarPendingScanButton = btn;
+        openRadarScanModal();
+    }
+
+    function openRadarScanModal() {
+        const modal = document.getElementById('radarScanModal');
+        const error = document.getElementById('radar-scan-error');
+        if (error) error.innerText = '';
+        if (modal) modal.classList.add('open');
+    }
+
+    function closeRadarScanModal() {
+        const modal = document.getElementById('radarScanModal');
+        if (modal) modal.classList.remove('open');
+    }
+
+    function toggleRadarSourceAll() {
+        const all = document.getElementById('radar-source-all');
+        document.querySelectorAll('.radar-source-option').forEach(input => {
+            input.checked = !!all?.checked;
+        });
+    }
+
+    function syncRadarSourceAll() {
+        const options = [...document.querySelectorAll('.radar-source-option')];
+        const all = document.getElementById('radar-source-all');
+        if (all) all.checked = options.every(input => input.checked);
+    }
+
+    function buildRadarScanConfig() {
+        const limitInput = document.getElementById('radar-scan-limit');
+        const error = document.getElementById('radar-scan-error');
+        const value = String(limitInput?.value || '').trim();
+        if (!/^\d+$/.test(value)) {
+            if (error) error.innerText = '扫描资产条数只能输入数字';
+            return null;
+        }
+        const limit = Number(value);
+        if (limit <= 0) {
+            if (error) error.innerText = '扫描资产条数必须大于 0';
+            return null;
+        }
+        const selected = [...document.querySelectorAll('.radar-source-option')]
+            .filter(input => input.checked)
+            .map(input => input.value);
+        if (!selected.length) {
+            if (error) error.innerText = '请至少选择一个扫描来源';
+            return null;
+        }
+        if (error) error.innerText = '';
+        return {
+            limit_total: limit,
+            source_ids: selected.length === document.querySelectorAll('.radar-source-option').length ? [] : selected,
+        };
+    }
+
+    function confirmRadarScan() {
+        const config = buildRadarScanConfig();
+        if (!config) return;
+        closeRadarScanModal();
+        startRadarScan(radarPendingScanButton, config);
+    }
+
+    async function startRadarScan(btn, config = { limit_total: 120, source_ids: [] }) {
+        const oldText = btn ? btn.innerText : radarScanButtonText;
+        radarScanButtonText = oldText || radarScanButtonText;
+        radarScanActive = true;
+        radarStopRequested = false;
+        radarCurrentRunId = null;
+        if (btn) { btn.innerText = '扫描中...'; btn.disabled = false; }
+        resetRadarProgress(config.limit_total || 0);
+        showRadarToast('后台已开始扫描，进度会在页面下方实时更新。');
+        try {
+            const res = await fetch(`${RADAR_API_BASE}/api/radar/run`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const started = await res.json();
+            if (started.run_id) {
+                radarCurrentRunId = started.run_id;
+                if (btn) btn.innerText = '停止扫描';
+                setRadarProgressStatus('运行中');
+                appendRadarProgress({
+                    stage: 'queued',
+                    message: `任务已启动：${started.run_id}；本轮最多扫描 ${config.limit_total} 条；来源：${config.source_ids?.length ? config.source_ids.join(', ') : '全部'}`
+                });
+                await pollRadarProgress(started.run_id);
+                return;
+            }
+            applyRadarPayload(started);
+            updateRadarTimeline(started);
+            showRadarToast(`扫描完成：本次扫描 ${started.kpis?.raw || 0} 条，新增入池 ${started.kpis?.new || 0} 条，累计 ${started.kpis?.cumulative || 0} 条。`);
+        } catch (err) {
+            setRadarProgressStatus('失败');
+            setRadarProgressCloseVisible(true);
+            appendRadarProgress({ stage: 'error', message: err.message || String(err) });
+            showRadarToast(`扫描失败：${err.message || err}`);
+        } finally {
+            radarScanActive = false;
+            radarStopRequested = false;
+            radarCurrentRunId = null;
+            if (btn) { btn.innerText = radarScanButtonText; btn.disabled = false; }
+        }
+    }
+
+    async function stopRadarScan(btn) {
+        if (!radarCurrentRunId || radarStopRequested) return;
+        const commit = window.confirm('是否将已扫描数据入库？\n\n点击“确定”：入库已扫描数据\n点击“取消”：删除本轮已扫描内容');
+        const mode = commit ? 'commit' : 'discard';
+        radarStopRequested = true;
+        if (btn) { btn.innerText = '停止中...'; btn.disabled = true; }
+        appendRadarProgress({
+            stage: 'stop',
+            message: commit ? '用户选择停止扫描：已扫描数据入库。' : '用户选择停止扫描：删除本轮已扫描内容。'
+        });
+        setRadarProgressStatus('停止中');
+        try {
+            const res = await fetch(`${RADAR_API_BASE}/api/radar/stop`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ run_id: radarCurrentRunId, mode })
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            showRadarToast(commit ? '已请求停止：系统会将已扫描数据入库。' : '已请求停止：系统会删除本轮已扫描内容。');
+        } catch (err) {
+            radarStopRequested = false;
+            if (btn) { btn.innerText = '停止扫描'; btn.disabled = false; }
+            appendRadarProgress({ stage: 'error', message: `停止请求失败：${err.message || err}` });
+            showRadarToast(`停止失败：${err.message || err}`);
+        }
+    }
+
+    function setRadarProgressStatus(status) {
+        const el = document.getElementById('radar-progress-status');
+        if (el) el.innerText = status;
+    }
+
+    function closeRadarProgress() {
+        const panel = document.getElementById('radar-progress-panel');
+        if (panel) panel.classList.add('closed');
+    }
+
+    function setRadarProgressCloseVisible(visible) {
+        const btn = document.getElementById('radar-progress-close');
+        if (btn) btn.classList.toggle('show', !!visible);
+    }
+
+    function updateRadarProgressBar(scanned = 0, target = 0, percent = null) {
+        const safeScanned = Math.max(0, Number(scanned) || 0);
+        const safeTarget = Math.max(0, Number(target) || 0);
+        const resolvedPercent = percent === null
+            ? (safeTarget > 0 ? Math.min(100, Math.round(safeScanned / safeTarget * 100)) : 0)
+            : Math.max(0, Math.min(100, Number(percent) || 0));
+        const countEl = document.getElementById('radar-progress-count');
+        const percentEl = document.getElementById('radar-progress-percent');
+        const fillEl = document.getElementById('radar-progress-fill');
+        if (countEl) countEl.innerText = `${safeScanned}/${safeTarget || '-'}`;
+        if (percentEl) percentEl.innerText = `${resolvedPercent}%`;
+        if (fillEl) fillEl.style.width = `${resolvedPercent}%`;
+    }
+
+    function resetRadarProgress(target = 0) {
+        if (radarProgressTimer) {
+            clearTimeout(radarProgressTimer);
+            radarProgressTimer = null;
+        }
+        const panel = document.getElementById('radar-progress-panel');
+        if (panel) panel.classList.remove('closed');
+        setRadarProgressCloseVisible(false);
+        setRadarProgressStatus('准备启动');
+        updateRadarProgressBar(0, target, 0);
+        const log = document.getElementById('radar-progress-log');
+        if (log) log.innerHTML = '';
+    }
+
+    function appendRadarProgress(event) {
+        const log = document.getElementById('radar-progress-log');
+        if (!log || !event) return;
+        const line = document.createElement('div');
+        line.className = `radar-progress-line ${event.stage === 'error' ? 'error' : ''}`;
+        const time = event.time ? new Date(event.time).toLocaleTimeString() : new Date().toLocaleTimeString();
+        line.innerHTML = `<span class="muted">[${time}] ${event.stage || 'log'}</span> ${event.message || ''}`;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    function renderRadarProgress(progress) {
+        const log = document.getElementById('radar-progress-log');
+        if (!log) return;
+        log.innerHTML = '';
+        (progress.events || []).forEach(appendRadarProgress);
+        const statusText = progress.status === 'done' ? '完成'
+            : progress.status === 'cancelled_committed' ? '已停止，已入库'
+            : progress.status === 'cancelled_discarded' ? '已停止，已删除'
+            : progress.status === 'error' ? '失败'
+            : progress.status === 'queued' ? '排队中'
+            : progress.status === 'stopping' ? '停止中'
+            : '运行中';
+        setRadarProgressStatus(statusText);
+        updateRadarProgressBar(progress.scanned_count || 0, progress.target_count || progress.config?.limit_total || 0, progress.progress_percent ?? null);
+        setRadarProgressCloseVisible(['done', 'cancelled_committed', 'cancelled_discarded', 'error'].includes(progress.status));
+    }
+
+    async function pollRadarProgress(runId) {
+        const res = await fetch(`${RADAR_API_BASE}/api/radar/progress?run_id=${encodeURIComponent(runId)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const progress = await res.json();
+        renderRadarProgress(progress);
+        const terminalStatuses = ['done', 'cancelled_committed', 'cancelled_discarded'];
+        if (terminalStatuses.includes(progress.status)) {
+            if (progress.payload) {
+                applyRadarPayload(progress.payload);
+                if (progress.status !== 'cancelled_discarded') {
+                    updateRadarTimeline(progress.payload);
+                }
+            } else {
+                await loadRadarAssets();
+            }
+            if (progress.status === 'cancelled_committed') {
+                showRadarToast(`扫描已停止：已扫描 ${progress.payload?.kpis?.raw || 0} 条线索并入库，新增 ${progress.payload?.kpis?.new || 0} 条，累计 ${progress.payload?.kpis?.cumulative || 0} 条。`);
+            } else if (progress.status === 'cancelled_discarded') {
+                showRadarToast('扫描已停止：本轮已扫描内容已删除，资产池保持原状态。');
+            } else {
+                showRadarToast(`扫描完成：本次扫描 ${progress.payload?.kpis?.raw || 0} 条，新增入池 ${progress.payload?.kpis?.new || 0} 条，累计 ${progress.payload?.kpis?.cumulative || 0} 条。`);
+            }
+            setRadarProgressCloseVisible(true);
+            return;
+        }
+        if (progress.status === 'error') {
+            setRadarProgressCloseVisible(true);
+            throw new Error(progress.error || '扫描失败');
+        }
+        await new Promise(resolve => {
+            radarProgressTimer = setTimeout(resolve, 1000);
+        });
+        return pollRadarProgress(runId);
+    }
+
+    function simulateRadarRun() {
+        return runRadarScan(document.querySelector('#view-asset-radar .btn-primary'));
+    }
+
+    function updateRadarTimeline(payload) {
+        const alertList = document.getElementById('radar-alert-list');
+        const timeline = document.querySelector('#view-asset-radar .timeline');
+        if (timeline) {
+            timeline.innerHTML = `<div class="timeline-item"><div class="timeline-date">刚刚</div><div class="timeline-content">完成一次实时扫描，本次扫描 ${payload.kpis?.raw || 0} 条，新增入池 ${payload.kpis?.new || 0} 条，累计 ${payload.kpis?.cumulative || 0} 条；初筛 ${payload.kpis?.initial || 0} 条，可追踪 ${payload.kpis?.trackable || 0} 条，待复核 ${payload.kpis?.review || 0} 条。</div></div>`;
+        }
+    }
+
+    function showRadarToast(message) {
+        const toast = document.getElementById('radarToast');
+        if (!toast) return;
+        toast.innerHTML = `<strong>资产雷达提醒</strong><br>${message}`;
+        toast.classList.add('show');
+        clearTimeout(window.radarToastTimer);
+        window.radarToastTimer = setTimeout(() => toast.classList.remove('show'), 3600);
+    }
+
+    function toggleRadarBackstage() {
+        const panel = document.getElementById('radarBackstagePanel');
+        if (!panel) return;
+        panel.classList.toggle('open');
+    }
+
+    function updateRadarBackstageVisibility(show) {
+        const entry = document.getElementById('radarBackstageEntry');
+        const panel = document.getElementById('radarBackstagePanel');
+        if (!entry) return;
+        entry.classList.toggle('show', show);
+        if (!show && panel) panel.classList.remove('open');
+    }
+
+    // 视图导航逻辑
+    function navTo(viewId, dimTitle = null) {
+        // 隐藏所有视图
+        document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+        // 显示目标视图
+        document.getElementById(viewId).classList.add('active');
+        // 滚动到顶部
+        window.scrollTo(0, 0);
+
+        // 如果是维度视图，按维度渲染不同指标、专题、图表与源文件
+        if (viewId === 'view-dimension' && dimTitle) {
+            renderDimension(dimTitle);
+        }
+        if (viewId === 'view-materials') {
+            const firstTab = document.querySelector('.material-tabs button');
+            renderMaterials('资产', firstTab);
+        }
+        if (viewId === 'view-asset-radar') {
+            renderRadarPool('scan', document.querySelector('.asset-pool-tabs button'));
+            loadRadarAssets();
+        }
+        updateRadarBackstageVisibility(viewId === 'view-asset-radar');
+    }
+
+    // 抽屉逻辑
+    function openDrawer(filename, location, summary) {
+        document.getElementById('drawer-filename').innerText = filename;
+        document.getElementById('drawer-location').innerText = location;
+        document.getElementById('drawer-summary').innerText = summary;
+
+        document.getElementById('drawer-overlay').style.display = 'block';
+        // 延迟一点加class以触发动画
+        setTimeout(() => {
+            document.getElementById('drawer-evidence').classList.add('open');
+        }, 10);
+    }
+
+    function closeDrawer() {
+        document.getElementById('drawer-evidence').classList.remove('open');
+        setTimeout(() => {
+            document.getElementById('drawer-overlay').style.display = 'none';
+        }, 300);
+    }
+
+    // 上传弹窗逻辑
+    function openUploadModal() {
+        document.getElementById('modal-upload').style.display = 'flex';
+        document.getElementById('upload-progress').style.display = 'none';
+        document.getElementById('upload-fill').style.width = '0%';
+        document.getElementById('upload-status').style.display = 'none';
+    }
+
+    function closeUploadModal() {
+        document.getElementById('modal-upload').style.display = 'none';
+    }
+
+    function simulateUpload() {
+        document.getElementById('upload-progress').style.display = 'block';
+        document.getElementById('upload-status').style.display = 'block';
+        document.getElementById('upload-status').innerText = '正在上传...';
+
+        let fill = document.getElementById('upload-fill');
+        fill.style.width = '30%';
+
+        setTimeout(() => {
+            fill.style.width = '70%';
+            document.getElementById('upload-status').innerText = 'Agent 正在解析提取信息...';
+        }, 800);
+
+        setTimeout(() => {
+            fill.style.width = '100%';
+            document.getElementById('upload-status').innerText = '解析完成！';
+        }, 1800);
+
+        setTimeout(() => {
+            closeUploadModal();
+            navTo('view-material');
+        }, 2200);
+    }
+
+    // 确认更新逻辑
+    function confirmUpdate() {
+        alert("已确认更新！系统将重新生成报告 v4.2 版本，并记录审计日志。");
+        navTo('view-dashboard');
+    }
+
+    // 阅读模式切换
+    let isSummaryMode = false;
+    function toggleMode() {
+        isSummaryMode = !isSummaryMode;
+        const btn = document.getElementById('modeBtn');
+        if (isSummaryMode) {
+            document.body.classList.add('mode-summary');
+            btn.innerText = '切换至尽调细读模式';
+            btn.style.background = 'white';
+            btn.style.color = 'var(--ms-blue)';
+        } else {
+            document.body.classList.remove('mode-summary');
+            btn.innerText = '切换至摘要模式';
+            btn.style.background = 'transparent';
+            btn.style.color = 'white';
+        }
+    }
+
+
+    const uploadedMaterials = {
+        '资产': [
+            ['不动产权证书_项目公司.pdf','权属证照','2023-10-20','已入库'],
+            ['资产评估报告_初稿.xlsx','评估/台账','2023-10-21','已入库'],
+            ['地下车库产权补充说明.pdf','权属说明','2023-10-27','需确认']
+        ],
+        '经济': [
+            ['销售台账_2023Q3.xlsx','销售台账','2023-10-22','已入库'],
+            ['周边竞品价格调研.pdf','市场对标','2023-10-24','已入库'],
+            ['回款预测模型.xlsx','测算模型','2023-10-26','解析中']
+        ],
+        '法律': [
+            ['股权转让协议.pdf','交易合同','2023-10-18','已入库'],
+            ['四方协议及补充协议.pdf','合同安排','2023-10-25','需确认'],
+            ['执行案件裁定书.pdf','诉讼执行','2023-10-25','已入库']
+        ],
+        '财务': [
+            ['债务明细表.xlsx','债务清单','2023-10-23','已入库'],
+            ['税费测算底稿.xlsx','税费测算','2023-10-24','已入库'],
+            ['现金流预测表.xlsx','现金流模型','2023-10-26','需确认']
+        ]
+    };
+
+    function renderMaterials(dim='资产', btn=null) {
+        document.querySelectorAll('.material-tabs button').forEach(b=>b.classList.remove('active'));
+        if (btn) btn.classList.add('active');
+        const list = document.getElementById('materials-list');
+        const rows = uploadedMaterials[dim] || [];
+        list.innerHTML = rows.map((f,idx)=>`<div class="material-file-row"><input type="checkbox"><span>${f[0]}</span><span>${f[1]}</span><span>${f[2]}</span><span><span class="tag ${f[3]==='需确认'?'medium':'status'}">${f[3]}</span></span><button class="delete-file-btn" onclick="deleteMaterial('${dim}',${idx})">删除</button></div>`).join('') || '<div style="padding:24px;color:var(--text-muted);">暂无材料</div>';
+    }
+
+    function deleteMaterial(dim, idx) {
+        if (confirm('确认删除该材料？原型中仅从当前页面列表移除。')) {
+            uploadedMaterials[dim].splice(idx,1);
+            renderMaterials(dim, document.querySelector('.material-tabs button.active'));
+        }
+    }
+
+    function createProject() {
+        // 标记为空项目状态，并记住当前选中项目为“新建项目”，刷新后由 DOMContentLoaded 统一处理。
+        localStorage.setItem('creditOSBlankProject', '1');
+        localStorage.setItem('creditOSCurrentProject', '新建项目|NEW-DRAFT');
+        window.location.reload();
+    }
+
+    function applyBlankProject() {
+        const select = document.getElementById('projectSelect');
+        if (!Array.from(select.options).some(o => o.value === '新建项目|NEW-DRAFT')) {
+            const opt = document.createElement('option');
+            opt.value = '新建项目|NEW-DRAFT';
+            opt.textContent = '新建项目（待命名 / 未初始化）';
+            select.insertBefore(opt, select.firstChild);
+        }
+        select.value = '新建项目|NEW-DRAFT';
+        document.title = 'Credit OS - 新建项目';
+        navTo('view-dashboard');
+
+        const dashboard = document.getElementById('view-dashboard');
+        dashboard.classList.add('blank-dashboard');
+        dashboard.querySelector('.overview-bar').innerHTML = `
+            <div class="overview-item"><span class="overview-label">报告版本</span><span class="overview-value">v0.0</span></div>
+            <div class="overview-item"><span class="overview-label">最近更新</span><span class="overview-value" style="font-size:14px;line-height:24px;">尚未生成</span></div>
+            <div class="overview-item"><span class="overview-label">材料总数</span><span class="overview-value">0 份</span></div>
+            <div class="overview-item"><span class="overview-label">本次新增</span><span class="overview-value">0 份</span></div>
+            <div class="overview-item"><span class="overview-label">待人工确认</span><span class="overview-value">0 项</span></div>
+            <div class="overview-item"><span class="overview-label">整体风险等级</span><span class="tag status" style="margin-top:4px;">待评估</span></div>
+        `;
+        const grid = dashboard.querySelector('.grid-layout');
+        if (grid && !dashboard.querySelector('.blank-notice')) {
+            grid.insertAdjacentHTML('afterbegin', `
+                <div class="blank-notice" style="grid-column:1 / -1;">
+                    <h2>新项目已创建，当前报告内容为空</h2>
+                    <div class="blank-muted">
+                        请使用右侧“材料补充与解析”中的 <strong>+ 上传新材料</strong> 上传合同、证照、财务表、评估报告、诉讼文件等材料。<br>
+                        Agent 会根据材料逐步生成资产、经济、法律、财务四个维度的报告内容。
+                    </div>
+                </div>
+            `);
+        }
+        dashboard.querySelectorAll('.dim-card .dim-summary').forEach(el => el.textContent = '暂无材料，等待上传后自动生成。');
+        dashboard.querySelectorAll('.dim-card .data-value').forEach(el => el.textContent = '-');
+        dashboard.querySelectorAll('.dim-footer span:first-child').forEach(el => el.textContent = '待核实: 0项');
+        dashboard.querySelectorAll('.tag.high,.tag.medium,.tag.low').forEach(el => { el.className = 'tag status'; el.textContent = '待评估'; });
+        const riskTitle = Array.from(dashboard.querySelectorAll('.card-title')).find(el => el.textContent.includes('核心风险预警'));
+        if (riskTitle) riskTitle.closest('.card').querySelector('ul').innerHTML = '<li>暂无风险事项。上传并解析材料后自动识别。</li>';
+        const timeline = dashboard.querySelector('.timeline');
+        if (timeline) timeline.innerHTML = '<div class="timeline-item"><div class="timeline-date">尚无动态</div><div class="timeline-content">上传新材料后将生成解析、入库、待确认和版本变化记录。</div></div>';
+        dashboard.querySelectorAll('.card div[style*="justify-content: space-between"]').forEach(row => { if (row.textContent.includes('《')) row.remove(); });
+        const pendingBtn = dashboard.querySelector('.pending-update-btn');
+        if (pendingBtn) {
+            pendingBtn.innerHTML = '查看待确认更新 <span style="background: var(--text-light); color: white; padding: 0 6px; border-radius: 10px; font-size: 10px; margin-left: 4px;">0</span>';
+            pendingBtn.onclick = () => alert('当前新建项目暂无待确认更新。请先上传并解析新材料。');
+        }
+    }
+
+    function switchProject() {
+        const value = document.getElementById('projectSelect').value;
+        const [, id] = value.split('|');
+
+        // 记住当前选中的项目，供刷新后恢复选中状态。
+        localStorage.setItem('creditOSCurrentProject', value);
+
+        if (id === 'NEW-DRAFT') {
+            localStorage.setItem('creditOSBlankProject', '1');
+        } else {
+            // 切到任意原有项目时清除空项目标记，并整页刷新，恢复原始 DOM。
+            localStorage.removeItem('creditOSBlankProject');
+        }
+        window.location.reload();
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+        const isBlank = localStorage.getItem('creditOSBlankProject') === '1';
+        const savedProject = localStorage.getItem('creditOSCurrentProject');
+
+        if (isBlank) {
+            applyBlankProject();
+        } else if (savedProject) {
+            const [name] = savedProject.split('|');
+            const select = document.getElementById('projectSelect');
+            if (select && Array.from(select.options).some(o => o.value === savedProject)) {
+                select.value = savedProject;
+            }
+            document.title = 'Credit OS - ' + name;
+        }
+    });
+
+    function toggleAiPanel() {
+        document.getElementById('aiPanel').classList.toggle('open');
+    }
+    function setAiContext(btn, label) {
+        document.querySelectorAll('.context-switch button').forEach(b=>b.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('aiContextLabel').innerText = label;
+    }
+    function quickAsk(type) {
+        const map = {
+            '问报告':'请概括当前报告最重要的三条结论。',
+            '查来源':'请列出当前结论的关键来源文件。',
+            '找风险':'请找出当前页面的高风险事项并说明影响。',
+            '列问题':'请列出仍需人工追问和核实的问题。',
+            '测影响':'如果新增材料改变价格或权属，请测算对风险等级和清偿率的影响。',
+            '更多':'还能从哪些角度继续审查这个项目？'
+        };
+        document.getElementById('aiInput').value = map[type] || type;
+        sendAiMessage();
+    }
+    function sendAiMessage() {
+        const input = document.getElementById('aiInput');
+        const q = input.value.trim();
+        if (!q) return;
+        const chat = document.getElementById('aiChat');
+        chat.insertAdjacentHTML('beforeend', `<div class="ai-msg user">${q}</div>`);
+        input.value='';
+        const ctx = document.getElementById('aiContextLabel').innerText;
+        const answer = `基于【${ctx}】检索，当前最需要关注的是：1）核心资产或交易权利是否存在限制；2）价格、回款与清偿测算是否过于乐观；3）新增材料是否改变风险等级。<br><br>建议先核验关键证据，再进入版本对比确认是否写入正式报告。<a class="evidence-link" onclick="openDrawer('AI引用证据包.pdf','第2-4页','AI回答引用的核心证据片段。')">查看来源</a>`;
+        setTimeout(()=>{ chat.insertAdjacentHTML('beforeend', `<div class="ai-msg assistant">${answer}</div>`); chat.scrollTop=chat.scrollHeight; }, 250);
+        chat.scrollTop=chat.scrollHeight;
+    }
+
+</script>
+
+</body>
+</html>

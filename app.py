@@ -7,6 +7,7 @@ import base64
 import hashlib
 import re
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -155,6 +156,8 @@ def _init_session() -> None:
         st.session_state.active_report_view = False
     if "active_report_chapter" not in st.session_state:
         st.session_state.active_report_chapter = ""
+    if "report_chapter_cache" not in st.session_state:
+        st.session_state.report_chapter_cache = {}
 
 
 def _is_configured(value: str | None) -> bool:
@@ -1036,6 +1039,55 @@ def _render_workbench_css() -> None:
             padding: 20px;
             margin-top: 24px;
         }
+        .report-insight-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin: 14px 0 18px;
+        }
+        .report-insight-card {
+            border: 1px solid var(--border-gray);
+            background: #fafafa;
+            padding: 12px;
+            min-height: 92px;
+        }
+        .report-insight-card strong {
+            display: block;
+            color: var(--ms-blue) !important;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+        .report-insight-card span {
+            color: var(--text-muted) !important;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .report-content-list {
+            padding-left: 18px;
+            margin: 8px 0 16px;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+        .report-content-list li {
+            margin-bottom: 6px;
+        }
+        .report-mini-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0 18px;
+            font-size: 12px;
+        }
+        .report-mini-table th,
+        .report-mini-table td {
+            border: 1px solid var(--border-gray);
+            padding: 8px 10px;
+            vertical-align: top;
+            text-align: left;
+        }
+        .report-mini-table th {
+            background: #fafafa;
+            color: var(--text-muted) !important;
+        }
         .stButton > button[kind="primary"], .stButton > button[data-testid="baseButton-primary"] {
             background: var(--ms-blue) !important;
             color: #fff !important;
@@ -1055,6 +1107,7 @@ def _render_workbench_css() -> None:
         }
         @media (max-width: 720px) {
             .overall-report-head { grid-template-columns: 1fr; }
+            .report-insight-grid { grid-template-columns: 1fr; }
         }
         </style>
         """,
@@ -1585,6 +1638,7 @@ def _chapter_status(
 
 
 def _overall_report_chapters(state: ProjectState, has_data: bool, run_done: bool) -> list[dict[str, object]]:
+    titles = _chapter_title_map()
     asset_count = _agent_patch_count(state, "asset_patches")
     economic_count = _agent_patch_count(state, "economic_patches")
     legal_count = _agent_patch_count(state, "legal_patches")
@@ -1603,15 +1657,15 @@ def _overall_report_chapters(state: ProjectState, has_data: bool, run_done: bool
 
     return [
         {
-            "title": "一、核心结论与投资建议",
+            "title": titles["core"],
             "desc": "汇总 PCS 宣判、核心风险、投资建议和下一步动作。",
             "tag_class": core_class,
             "tag": "已生成" if has_report else core_label,
             "progress": 96 if has_report else core_progress,
-            "target": "report",
+            "target": "core",
         },
         {
-            "title": "二、资产底盘与权属",
+            "title": titles["asset"],
             "desc": "项目概况、资产清单、权属证照、抵押查封和可处置边界。",
             "tag_class": _chapter_status(has_data, run_done, asset_count)[0],
             "tag": _chapter_status(has_data, run_done, asset_count)[1],
@@ -1619,36 +1673,36 @@ def _overall_report_chapters(state: ProjectState, has_data: bool, run_done: bool
             "target": "asset",
         },
         {
-            "title": "三、市场与竞品判断",
+            "title": titles["market"],
             "desc": "市场价格、货值假设、去化节奏、回款能力和外部对标。",
             "tag_class": _chapter_status(has_data, run_done, economic_count)[0],
             "tag": _chapter_status(has_data, run_done, economic_count)[1],
             "progress": _chapter_status(has_data, run_done, economic_count)[2],
-            "target": "economic",
+            "target": "market",
         },
         {
-            "title": "四、产策定位与产品推导",
+            "title": titles["strategy"],
             "desc": "结合资产条件和经济测算，沉淀产品定位、开发节奏和经营策略。",
             "tag_class": "medium" if has_data and not run_done else ("status" if economic_count and asset_count else "medium"),
             "tag": "可生成" if run_done and economic_count and asset_count else ("待扫描" if has_data else "待接入"),
             "progress": 70 if run_done and economic_count and asset_count else (24 if has_data else 0),
-            "target": "economic",
+            "target": "strategy",
         },
         {
-            "title": "五、交易结构与风控",
+            "title": titles["transaction"],
             "desc": "股权链条、资金路径、债权口径、担保措施和退出安排。",
             "tag_class": transaction_class,
             "tag": transaction_label,
             "progress": transaction_progress,
-            "target": "legal",
+            "target": "transaction",
         },
         {
-            "title": "六、财务测算与敏感性",
+            "title": titles["finance"],
             "desc": "债务结构、复工成本、税费、资金缺口、清偿率和敏感性情景。",
             "tag_class": finance_class,
             "tag": finance_label,
             "progress": finance_progress,
-            "target": "financial",
+            "target": "finance",
         },
     ]
 
@@ -1728,7 +1782,7 @@ def _render_overall_report_panel(state: ProjectState, has_data: bool, run_done: 
     with action_cols[0]:
         if st.button("阅读完整报告", key="open_overall_report", use_container_width=True):
             st.session_state.active_report_view = True
-            st.session_state.active_report_chapter = "report"
+            st.session_state.active_report_chapter = "core"
             st.rerun()
     with action_cols[1]:
         if st.button("查看报告框架", key="open_report_framework", use_container_width=True):
@@ -1775,6 +1829,272 @@ def _render_report_framework(chapters: list[dict[str, object]]) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def _patch_rows(title: str, patches: list[str], limit: int = 5) -> str:
+    if not patches:
+        return (
+            "<tr>"
+            f"<td>{escape(title)}</td>"
+            "<td>等待 Agent 输出。</td>"
+            "<td><span class='tag medium'>待生成</span></td>"
+            "</tr>"
+        )
+    rows = []
+    for patch in patches[:limit]:
+        topic, detail = _split_patch_parts(str(patch))
+        level = _risk_level_for_patch(str(patch))
+        tag_class = "high" if level == "高风险" else ("medium" if level == "中风险" else "status")
+        rows.append(
+            "<tr>"
+            f"<td>{escape(topic or title)}</td>"
+            f"<td>{escape(_short_text(detail or patch, 140))}</td>"
+            f"<td><span class='tag {tag_class}'>{escape(level)}</span></td>"
+            "</tr>"
+        )
+    return "".join(rows)
+
+
+def _report_patch_bucket(state: ProjectState, chapter_key: str) -> list[str]:
+    asset = state.get("asset_patches", []) or []
+    economic = state.get("economic_patches", []) or []
+    legal = state.get("legal_patches", []) or []
+    financial = state.get("financial_patches", []) or []
+    if chapter_key == "asset":
+        return asset
+    if chapter_key == "market":
+        return economic
+    if chapter_key == "strategy":
+        return asset[:3] + economic[:4]
+    if chapter_key == "transaction":
+        return legal + financial[:2]
+    if chapter_key == "finance":
+        return financial + economic[:2]
+    return asset[:2] + economic[:2] + legal[:2] + financial[:2]
+
+
+def _chapter_title_map() -> dict[str, str]:
+    return {
+        "core": "一、核心结论与投资建议",
+        "asset": "二、资产底盘与权属",
+        "market": "三、市场与竞品判断",
+        "strategy": "四、产策定位与产品推导",
+        "transaction": "五、交易结构与风控",
+        "finance": "六、财务测算与敏感性",
+    }
+
+
+def _chapter_focus_map() -> dict[str, str]:
+    return {
+        "core": "综合四个 Agent 的发现、PCS 分数和 Closer 最终报告，输出投决会可先读的核心结论、主要风险、投资建议和下一步动作。",
+        "asset": "围绕资产清单、权属证照、抵押查封、工程状态、可处置边界和资产价值支撑，形成资产底盘专题。",
+        "market": "围绕市场价格、货值假设、竞品/可比项目、去化速度、回款节奏和市场风险，形成市场与竞品专题。",
+        "strategy": "结合资产条件和经济判断，推导产品定位、开发/复工节奏、经营策略、价格策略和需要补充的产策材料。",
+        "transaction": "围绕股权链条、债权顺位、控制权、资金路径、担保措施、司法/查封路径和退出安排，形成交易风控专题。",
+        "finance": "围绕债务结构、复工成本、税费、资金缺口、清偿率、收益测算和敏感性情景，形成财务测算专题。",
+    }
+
+
+def _report_generation_fingerprint(state: ProjectState, chapter_key: str) -> str:
+    payload = {
+        "chapter": chapter_key,
+        "asset": state.get("asset_patches", []) or [],
+        "economic": state.get("economic_patches", []) or [],
+        "legal": state.get("legal_patches", []) or [],
+        "financial": state.get("financial_patches", []) or [],
+        "pcs_score": state.get("pcs_score", 0),
+        "pcs_breakdown": state.get("pcs_breakdown", {}),
+        "final_report": state.get("final_report", "") or "",
+    }
+    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _generate_report_chapter_with_llm(state: ProjectState, chapter_key: str) -> str:
+    cache_key = _report_generation_fingerprint(state, chapter_key)
+    cache = st.session_state.get("report_chapter_cache", {})
+    if cache_key in cache:
+        return str(cache[cache_key])
+
+    title = _chapter_title_map().get(chapter_key, _chapter_title_map()["core"])
+    focus = _chapter_focus_map().get(chapter_key, _chapter_focus_map()["core"])
+    system_prompt = f"""
+你是困境资产投融资项目的整体尽调报告写作 Agent，正在生成《{title}》章节。
+你只能基于用户提供的四个 Agent 输出、PCS 扣分矩阵和 Closer 最终报告写作，不能引入外部事实，不能编造来源。
+写作要求：
+1. 输出 Markdown。
+2. 结构必须包含：章节判断、关键依据、主要风险、待核实事项、投决建议。
+3. 所有金额、比例、主体、资产、债权、查封、成本、去化等事实必须来自输入；没有证据就写“待补充材料确认”。
+4. 聚焦本章节主题：{focus}
+5. 语言要像投决材料，直接、审慎、可执行。
+"""
+    user_payload = json.dumps(
+        {
+            "chapter_key": chapter_key,
+            "chapter_title": title,
+            "chapter_focus": focus,
+            "asset_agent_patches": state.get("asset_patches", []) or [],
+            "economic_agent_patches": state.get("economic_patches", []) or [],
+            "legal_agent_patches": state.get("legal_patches", []) or [],
+            "financial_agent_patches": state.get("financial_patches", []) or [],
+            "pcs_score": state.get("pcs_score", 0),
+            "pcs_breakdown": state.get("pcs_breakdown", {}),
+            "closer_final_report": state.get("final_report", "") or "",
+        },
+        ensure_ascii=False,
+    )
+    generated = _invoke_brain(system_prompt, user_payload).strip()
+    cache[cache_key] = generated
+    st.session_state.report_chapter_cache = cache
+    return generated
+
+
+def _pre_generate_report_chapters(state: ProjectState) -> None:
+    if not _is_brain_ready():
+        return
+    chapter_keys = ["core", "asset", "market", "strategy", "transaction", "finance"]
+    progress = st.progress(0, text="正在生成整体报告 6 个专题...")
+    status = st.empty()
+    for index, chapter_key in enumerate(chapter_keys, start=1):
+        title = _chapter_title_map().get(chapter_key, chapter_key)
+        status.info(f"正在生成整体报告专题：{title} ({index}/6)")
+        try:
+            _generate_report_chapter_with_llm(state, chapter_key)
+        except Exception as exc:
+            logger.warning("Pre-generate report chapter failed | chapter=%s | error=%s", chapter_key, exc)
+            status.warning(f"{title} 生成失败，用户进入章节时会重试：{exc}")
+        progress.progress(index / len(chapter_keys), text=f"整体报告专题生成进度 {index}/6")
+    status.success("整体报告 6 个专题已生成。")
+    time.sleep(0.6)
+    status.empty()
+    progress.empty()
+
+
+def _report_chapter_content(state: ProjectState, chapter_key: str, has_data: bool, run_done: bool) -> dict[str, object]:
+    pcs_score = int(state.get("pcs_score", 0) or 0) if run_done else None
+    final_report = str(state.get("final_report", "") or "").strip()
+    patches = _report_patch_bucket(state, chapter_key)
+    title_map = _chapter_title_map()
+    lead_map = {
+        "core": "本章由四个 Agent 的专题结论、PCS 扣分矩阵和 Closer LLM 最终报告汇总形成，供投决会先读。",
+        "asset": "本章聚焦资产清单、权属边界、抵押查封和可处置性，主要来自资产 Agent 输出。",
+        "market": "本章聚焦货值、价格假设、去化节奏和回款能力，主要来自经济 Agent 输出。",
+        "strategy": "本章把资产条件与经济判断合并，形成产品定位、开发节奏和经营策略的推导链。",
+        "transaction": "本章聚焦交易路径、债权顺位、控制权、担保措施和退出安排，主要来自法律与财务 Agent 输出。",
+        "finance": "本章聚焦债务、成本、税费、资金缺口、清偿率和敏感性，主要来自财务 Agent 输出。",
+    }
+    if not has_data:
+        summary = "当前尚未接入项目材料，无法生成本章正文。请先上传资料包或载入演示结构化数据。"
+    elif not run_done:
+        summary = "项目材料已接入，但四 Agent 审阅尚未完成。本章将以当前材料槽位作为草稿基础，扫描后补齐风险判断和正文。"
+    elif patches:
+        summary = _short_text("；".join(str(item) for item in patches[:3]), 220)
+    else:
+        summary = "四 Agent 已完成扫描，但本章没有识别出明确专题输出，建议补充材料或复核分流口径。"
+
+    if chapter_key == "core" and final_report:
+        summary = _short_text(final_report, 260)
+
+    risk_items = [_short_text(str(item), 120) for item in patches[:5]]
+    if not risk_items and final_report:
+        risk_items = [_short_text(item, 120) for item in re.split(r"\n+", final_report) if item.strip()][:5]
+    if not risk_items:
+        risk_items = ["等待 Agent 输出关键发现。"]
+
+    review_items = [_topic_review_item(str(item)) for item in patches[:4]] if patches else []
+    if not review_items:
+        review_items = ["补充材料后复核证据来源、金额口径和对 PCS 结论的影响。"]
+
+    if pcs_score is None:
+        decision = "待 PCS 宣判"
+        decision_detail = "四 Agent 扫描完成后生成投决分数。"
+    elif pcs_score < 50:
+        decision = "红线拦截"
+        decision_detail = f"PCS {pcs_score}，需先修复关键风险再进入交易。"
+    elif pcs_score < 75:
+        decision = "条件推进"
+        decision_detail = f"PCS {pcs_score}，可进入复核，但需锁定关键前置条件。"
+    else:
+        decision = "条件通过"
+        decision_detail = f"PCS {pcs_score}，具备进入投决复核基础。"
+
+    return {
+        "title": title_map.get(chapter_key, title_map["core"]),
+        "lead": lead_map.get(chapter_key, lead_map["core"]),
+        "summary": summary,
+        "risk_items": risk_items,
+        "review_items": review_items,
+        "decision": decision,
+        "decision_detail": decision_detail,
+        "patches": patches,
+        "final_report": final_report,
+    }
+
+
+def _render_report_chapter_content(state: ProjectState, chapter_key: str, has_data: bool, run_done: bool) -> None:
+    content = _report_chapter_content(state, chapter_key, has_data, run_done)
+    llm_body = ""
+    llm_error = ""
+    if run_done and _is_brain_ready():
+        cols = st.columns([1, 5], gap="small")
+        with cols[0]:
+            if st.button("重新生成本章", key=f"regen_report_chapter_{chapter_key}", use_container_width=True):
+                cache_key = _report_generation_fingerprint(state, chapter_key)
+                st.session_state.get("report_chapter_cache", {}).pop(cache_key, None)
+                st.rerun()
+        cache_key = _report_generation_fingerprint(state, chapter_key)
+        cache = st.session_state.get("report_chapter_cache", {})
+        context = st.spinner(f"LLM 正在生成《{content['title']}》专题正文...") if cache_key not in cache else nullcontext()
+        with context:
+            try:
+                llm_body = _generate_report_chapter_with_llm(state, chapter_key)
+            except Exception as exc:
+                logger.warning("Report chapter LLM generation failed | chapter=%s | error=%s", chapter_key, exc)
+                llm_error = str(exc)
+    st.markdown(
+        f"""
+        <div class="generated-report-body">
+            <div class="report-section-title">{escape(str(content["title"]))}</div>
+            <div class="report-chapter-desc">{escape(str(content["lead"]))}</div>
+            <div class="report-insight-grid">
+                <div class="report-insight-card"><strong>章节摘要</strong><span>{escape(str(content["summary"]))}</span></div>
+                <div class="report-insight-card"><strong>投决状态</strong><span>{escape(str(content["decision"]))}<br>{escape(str(content["decision_detail"]))}</span></div>
+                <div class="report-insight-card"><strong>生成依据</strong><span>四 Agent 专题输出、PCS 扣分矩阵、Closer LLM 最终报告。</span></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if llm_body:
+        st.markdown("##### LLM 生成专题正文")
+        st.markdown(llm_body)
+    elif run_done and not _is_brain_ready():
+        st.warning("当前未配置 BRAIN_API_KEY 或 OPENAI_API_KEY，无法调用 LLM 生成专题正文；下方展示 Agent 结果兜底视图。")
+    elif llm_error:
+        st.warning(f"LLM 生成失败，已展示 Agent 结果兜底视图：{llm_error}")
+    else:
+        st.markdown("##### 关键发现")
+        st.markdown(
+            "<ul class='report-content-list'>"
+            + "".join(f"<li>{escape(str(item))}</li>" for item in content["risk_items"])
+            + "</ul>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("##### Agent 证据与风险分层")
+    st.markdown(
+        "<table class='report-mini-table'><thead><tr><th>专题</th><th>Agent 结论摘录</th><th>风险等级</th></tr></thead>"
+        f"<tbody>{_patch_rows(str(content['title']), list(content['patches']))}</tbody></table>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("##### 待确认事项")
+    st.markdown(
+        "<ul class='report-content-list'>"
+        + "".join(f"<li>{escape(str(item))}</li>" for item in content["review_items"])
+        + "</ul>",
+        unsafe_allow_html=True,
+    )
+    if chapter_key == "core" and content["final_report"]:
+        st.markdown("##### Closer LLM 最终报告")
+        st.markdown(str(content["final_report"]))
 
 
 def _render_overall_report_detail(state: ProjectState, has_data: bool, run_done: bool) -> None:
@@ -1824,40 +2144,18 @@ def _render_overall_report_detail(state: ProjectState, has_data: bool, run_done:
             target = str(chapter["target"])
             with col:
                 _render_report_chapter_card(chapter)
-                label = "查看正文" if target == "report" else ("生成正文" if run_done else "查看草稿")
+                label = "查看正文" if run_done else "查看草稿"
                 if st.button(label, key=f"detail_report_chapter_{row_start}_{index}_{target}", use_container_width=True):
                     st.session_state.active_report_chapter = target
-                    if target != "report" and has_data:
-                        st.session_state.active_dimension = target
-                        st.session_state.active_report_view = False
                     st.rerun()
 
     if st.session_state.get("show_report_framework", False):
         _render_report_framework(chapters)
 
-    report = str(state.get("final_report", "") or "").strip()
-    selected = next((item for item in chapters if item["target"] == selected_target), chapters[0])
-    st.markdown(
-        f"""
-        <div class="generated-report-body">
-            <div class="report-section-title">{escape(str(selected["title"]))}</div>
-            <div class="report-chapter-desc">{escape(str(selected["desc"]))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    if run_done and report:
-        st.markdown(report)
-    else:
-        st.markdown(
-            """
-            <div class="empty-report">
-                完整报告正文待生成<br>
-                启动四 Agent 审阅并完成 PCS 宣判后，这里会写入正式报告正文。
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    valid_targets = {str(item["target"]) for item in chapters}
+    if selected_target not in valid_targets:
+        selected_target = "core"
+    _render_report_chapter_content(state, selected_target, has_data, run_done)
 
 
 def _dimension_specs() -> list[dict[str, str]]:
@@ -2191,6 +2489,7 @@ def _inject_sample_data() -> None:
     state["metric_results"] = {}
     st.session_state.project_state = state
     st.session_state.metric_result_cache = {}
+    st.session_state.report_chapter_cache = {}
     st.session_state.run_done = False
     st.session_state.event_log = ["演示样本已载入：海南陵水项目四类结构化文本已分流。"]
     st.session_state.ocr_markdown = ""
@@ -2787,6 +3086,7 @@ def main() -> None:
                         )
                     st.session_state.project_state = structured_state
                     st.session_state.metric_result_cache = {}
+                    st.session_state.report_chapter_cache = {}
                     st.session_state.ocr_markdown = merged_markdown
                     st.session_state.run_done = False
                     st.session_state.event_log = parse_logs
@@ -2851,6 +3151,7 @@ def main() -> None:
             st.session_state.project_state = final_state
             st.session_state.run_done = True
             st.session_state.project_updated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+            _pre_generate_report_chapters(final_state)
             if st.session_state.run_dir:
                 _save_final_report(Path(st.session_state.run_dir), final_state)
             logger.info("LangGraph scan finished | pcs_score=%s", final_state.get("pcs_score"))

@@ -4,10 +4,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from .asset_tags import apply_asset_tags
 from .crawler import enrich_notice_detail
 from .model_config import dedupe_model, model_for_node, model_plan
 from .models import AssetRecord, AuctionEvent, DedupeResult, RawNotice, WorkflowResult
-from .llm_analysis import llm_or_rule_analysis, structure_notice_detail_with_llm
+from .llm_analysis import llm_or_rule_analysis, review_asset_readability_with_glm, structure_notice_detail_with_llm
 from .rules import coarse_filter, detailed_screening, detect_update_events, extract_city_from_text, stable_asset_id
 from .storage import JsonAssetStore
 from .tracing import traceable_node
@@ -98,6 +99,95 @@ def should_expand_before_coarse_filter(notice: RawNotice) -> bool:
     return any(term in text for term in AMC_EXPAND_TERMS)
 
 
+def _has_readable_detail_sections(record: AssetRecord) -> bool:
+    text = " ".join(
+        f"{section.get('title', '')} {section.get('content', '')}"
+        for section in (record.detail_sections or [])
+        if isinstance(section, dict)
+    ).strip()
+    return bool(record.detail_sections and len(text) >= 80)
+
+
+def _sync_record_from_notice(record: AssetRecord, notice: RawNotice) -> None:
+    record.raw_text = notice.raw_text or record.raw_text
+    record.detail_text = notice.detail_text or record.detail_text
+    record.attachment_summaries = notice.attachments or record.attachment_summaries
+    if notice.city and not record.city:
+        record.city = notice.city
+    if notice.amount_text and not record.amount_text:
+        record.amount_text = notice.amount_text
+
+
+@traceable_node("asset_readability_reviewer_node")
+def asset_readability_quality_gate(
+    record: AssetRecord,
+    notice: RawNotice,
+    progress: ProgressCallback | None = None,
+) -> AssetRecord:
+    """Ensure every pooled asset has readable DeepSeek sections and GLM review."""
+    last_review: dict | None = None
+    for attempt in range(1, 3):
+        if progress:
+            progress(
+                "readability",
+                f"入池可读性整理/复核 第 {attempt} 次：{record.title}",
+                {"asset_id": record.asset_id, "attempt": attempt, "pool": record.pool},
+            )
+
+        needs_fetch = attempt > 1 or not (notice.detail_text or record.detail_text)
+        if needs_fetch and notice.source_url:
+            notice.detail_text = "" if attempt > 1 else notice.detail_text
+            notice = enrich_notice_detail(
+                notice,
+                progress=progress,
+                include_attachments=False,
+                detail_limit=16000,
+            )
+
+        if not notice.detail_text and record.detail_text:
+            notice.detail_text = record.detail_text
+        if not notice.raw_text and record.raw_text:
+            notice.raw_text = record.raw_text
+        _sync_record_from_notice(record, notice)
+        if not _has_readable_detail_sections(record) or attempt > 1:
+            analysis = {
+                "summary": record.extracted_summary,
+                "collateral_detail": record.collateral_detail,
+                "amount_text": record.amount_text,
+            }
+            record.detail_sections = structure_notice_detail_with_llm(notice, analysis)
+            record.node_models["detail_readability_node"] = model_for_node("detail_readability_node").model
+
+        review = review_asset_readability_with_glm(record)
+        last_review = review
+        record.node_models["asset_readability_reviewer_node"] = str(review.get("model_name") or model_for_node("asset_readability_reviewer_node").model)
+        record.notes.append(
+            f"{datetime.utcnow().isoformat()} readability_review attempt={attempt} "
+            f"passed={review.get('passed')} score={review.get('cleanliness_score')} "
+            f"reasons={' | '.join(review.get('reasons') or [])}"
+        )
+        if review.get("passed"):
+            return record
+
+        if progress:
+            progress(
+                "readability_retry",
+                f"可读性复核未通过，打回重新抓取/整理：{record.title}",
+                {
+                    "asset_id": record.asset_id,
+                    "attempt": attempt,
+                    "reasons": review.get("reasons") or [],
+                    "retry_focus": review.get("retry_focus", ""),
+                },
+            )
+
+    if last_review and not last_review.get("passed"):
+        record.pool = "review"
+        record.notes.append(f"{datetime.utcnow().isoformat()} moved to review by readability gate")
+    apply_asset_tags(record)
+    return record
+
+
 @traceable_node("asset_pool_update_node")
 def asset_pool_update_node(
     notice: RawNotice,
@@ -141,6 +231,7 @@ def asset_pool_update_node(
                 record.is_split_sale = True
             if "relisted" in dedupe.update_events:
                 record.is_relisted = True
+        record = asset_readability_quality_gate(record, notice, progress=progress)
         records[record.asset_id] = record
         return record
 
@@ -209,10 +300,14 @@ def asset_pool_update_node(
             else:
                 if progress:
                     progress("scan_pool", f"展开后仍留在扫描池：{notice.title}", {"pool": "scan", "asset_id": record.asset_id})
+                record = asset_readability_quality_gate(record, notice, progress=progress)
+                records[record.asset_id] = record
                 return record
         else:
             if progress:
                 progress("scan_pool", f"进入扫描池：{notice.title}", {"pool": "scan", "asset_id": record.asset_id})
+            record = asset_readability_quality_gate(record, notice, progress=progress)
+            records[record.asset_id] = record
             return record
 
     if basic_coarse.passed and progress:
@@ -224,6 +319,8 @@ def asset_pool_update_node(
     if not basic_coarse.passed:
         if progress:
             progress("scan_pool", f"进入扫描池：{notice.title}", {"pool": "scan", "asset_id": record.asset_id})
+        record = asset_readability_quality_gate(record, notice, progress=progress)
+        records[record.asset_id] = record
         return record
 
     if progress:
@@ -265,6 +362,7 @@ def asset_pool_update_node(
         record.pool = "initial"
     elif coarse.passed:
         record.pool = "initial"
+    record = asset_readability_quality_gate(record, notice, progress=progress)
     records[record.asset_id] = record
     if progress:
         progress("pool_update", f"入池完成：{notice.title} -> {record.pool}", {"pool": record.pool, "asset_id": record.asset_id})

@@ -11,6 +11,7 @@ from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 
+from .llm_analysis import classify_source_category_with_glm
 from .models import RawNotice
 from .rules import extract_city_from_text
 from .sources import DEFAULT_SOURCES, SourceSpec
@@ -27,6 +28,17 @@ ATTACHMENT_EXTS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar")
 HTML_EXTS = (".html", ".htm", ".shtml", ".asp", ".aspx", ".php")
 DOWNLOAD_PATH_HINTS = ("download", "file", "upload", "attachment", "attach", "annex", "appendix", "fujian")
 ATTACHMENT_LABEL_HINTS = ("附件", "下载", "清单", "明细", "照片", "债权清单", "资产清单", "评估报告", "竞买须知", "调查表")
+COAMC_BASE_URL = "https://sales.coamc.com.cn"
+COAMC_NOTICE_API = f"{COAMC_BASE_URL}/coamc/api/getNoticePage"
+COAMC_NOTICE_TYPES = [
+    ("DEBTS_DISPOSITION", "抵债物资产处置公告", 1),
+    ("CREDIT_DISPOSITION", "债权资产处置公告", 1),
+    ("ASSET_DISPOSITION", "资产包处置公告", 1),
+    ("STOCK_DISPOSITION", "股权资产处置公告", 1),
+    ("MULTI_DISPOSITION", "多项资产处置公告", 1),
+    ("INVESTMENT", "资产包招商公告", 2),
+    ("MARKETING", "推介信息", 2),
+]
 ROOT = Path(__file__).resolve().parents[2]
 ATTACHMENT_DIR = ROOT / "data" / "attachments"
 ProgressCallback = Callable[[str, str, dict | None], None]
@@ -39,6 +51,43 @@ def _clean_text(value: str) -> str:
     value = re.sub(r"<[^>]+>", " ", value)
     value = html.unescape(value)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _repair_mojibake(value: str) -> str:
+    try:
+        repaired = value.encode("latin1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+    if len(re.findall(r"[\u4e00-\u9fff]", repaired)) > len(re.findall(r"[\u4e00-\u9fff]", value)):
+        return repaired
+    return value
+
+
+def _response_text(response: httpx.Response) -> str:
+    text = response.text
+    return _repair_mojibake(text)
+
+
+def _extract_detail_text(html_text: str, source_id: str) -> str:
+    if source_id == "coamc_orient_disposal":
+        match = re.search(
+            r"<div\b[^>]*class=[\"'][^\"']*\bnotice-detail\b[^\"']*[\"'][^>]*>([\s\S]*?)(?:<div\b[^>]*class=[\"'][^\"']*\bfooter\b|</body>)",
+            html_text,
+            flags=re.I,
+        )
+        if match:
+            return _clean_text(match.group(1))
+    for pattern in (
+        r"<article\b[^>]*>([\s\S]*?)</article>",
+        r"<main\b[^>]*>([\s\S]*?)</main>",
+        r"<div\b[^>]*class=[\"'][^\"']*(?:detail|content|article|notice)[^\"']*[\"'][^>]*>([\s\S]*?)</div>",
+    ):
+        match = re.search(pattern, html_text, flags=re.I)
+        if match:
+            cleaned = _clean_text(match.group(1))
+            if len(cleaned) > 80:
+                return cleaned
+    return _clean_text(html_text)
 
 
 def _suffix_from_response(resp: httpx.Response, fallback: str = ".bin") -> str:
@@ -173,8 +222,8 @@ def _fetch_detail(
         response = client.get(url)
         response.raise_for_status()
         response.encoding = response.encoding or "utf-8"
-        html_text = response.text
-        detail = _clean_text(html_text)
+        html_text = _response_text(response)
+        detail = _extract_detail_text(html_text, source_id)
         attachments = _download_attachments(client, url, html_text, source_id) if include_attachments else []
         return detail[:20000], attachments
     except Exception as exc:
@@ -198,7 +247,8 @@ def enrich_notice_detail(
         "User-Agent": "Mozilla/5.0 AssetRadar/0.2",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    with httpx.Client(timeout=20, follow_redirects=True, headers=headers) as client:
+    verify_ssl = source_id != "gwamcc_international_disposal"
+    with httpx.Client(timeout=20, follow_redirects=True, headers=headers, verify=verify_ssl) as client:
         detail_text, attachments = _fetch_detail(
             client,
             source_id,
@@ -287,6 +337,186 @@ def _extract_links(
     return notices
 
 
+def _coamc_relevant_categories(progress: ProgressCallback | None = None) -> list[tuple[str, str, int, dict]]:
+    selected: list[tuple[str, str, int, dict]] = []
+    for type_code, name, notice_cate in COAMC_NOTICE_TYPES:
+        decision = classify_source_category_with_glm(name, [type_code])
+        if progress:
+            progress(
+                "source_category",
+                f"识别东方资产下拉分类：{name} -> {'纳入' if decision.get('include') else '剔除'}",
+                {"category": name, "type": type_code, **decision},
+            )
+        if decision.get("include"):
+            selected.append((type_code, name, notice_cate, decision))
+    return selected
+
+
+def _crawl_coamc_notice(
+    source: SourceSpec,
+    limit: int,
+    progress: ProgressCallback | None = None,
+    should_stop: StopCallback | None = None,
+) -> list[RawNotice]:
+    notices: list[RawNotice] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 AssetRadar/0.2",
+        "Referer": source.url,
+    }
+    categories = _coamc_relevant_categories(progress=progress)
+    if not categories:
+        return notices
+    category_limit = max(1, (limit + len(categories) - 1) // len(categories))
+    with httpx.Client(timeout=20, follow_redirects=True, headers=headers) as client:
+        for type_code, category_name, notice_cate, decision in categories:
+            found_in_category = 0
+            for page in range(1, max(1, source.max_pages) + 1):
+                if should_stop and should_stop():
+                    return notices
+                if found_in_category >= category_limit or len(notices) >= limit:
+                    break
+                if progress:
+                    progress(
+                        "page",
+                        f"扫描东方资产：{category_name} 第 {page} 页",
+                        {"source": source.name, "category": category_name, "page": page},
+                    )
+                response = client.post(
+                    COAMC_NOTICE_API,
+                    data={
+                        "title": "",
+                        "type": type_code,
+                        "branchId": "",
+                        "condition": "0",
+                        "pageSize": source.page_size,
+                        "page": page,
+                        "noticeCate": notice_cate,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                container = payload.get("data") if isinstance(payload, dict) else {}
+                page_data = container.get("data") if isinstance(container, dict) else {}
+                rows = page_data.get("content") if isinstance(page_data, dict) else []
+                if not rows:
+                    break
+                for row in rows:
+                    if should_stop and should_stop():
+                        return notices
+                    if found_in_category >= category_limit or len(notices) >= limit:
+                        break
+                    title = str(row.get("title") or "").strip()
+                    if not title:
+                        continue
+                    row_text = json.dumps(row, ensure_ascii=False)
+                    detail_url = urljoin(COAMC_BASE_URL, str(row.get("url") or source.url))
+                    notice = RawNotice(
+                        source_platform=source.name,
+                        source_url=detail_url,
+                        title=title[:180],
+                        notice_date=_notice_date(row.get("auditTime") or row.get("addTime")),
+                        raw_text=f"{title} {row.get('branchName') or ''} {row.get('typeKey') or category_name}",
+                        amount_text=_extract_amount_text(f"{title} {row_text}"),
+                        disposal_agency=str(row.get("branchName") or source.name),
+                        city=extract_city_from_text(title, row_text),
+                        metadata={
+                            "source_id": source.source_id,
+                            "source_type": source.source_type,
+                            "scan_mode": "coamc_notice_api",
+                            "source_scan_llm_used": False,
+                            "source_category_llm_used": bool(decision.get("llm_used")),
+                            "source_category_model": decision.get("model_name"),
+                            "disposal_type": type_code,
+                            "disposal_type_name": category_name,
+                            "notice_id": row.get("id"),
+                        },
+                    )
+                    notices.append(notice)
+                    found_in_category += 1
+                    if progress:
+                        progress("notice", f"发现资产线索：{title[:80]}", {"source": source.name, "count": len(notices)})
+                total_pages = int(page_data.get("totalPages") or page) if isinstance(page_data, dict) else page
+                if page >= total_pages:
+                    break
+    return notices
+
+
+def _gwamcc_page_url(source: SourceSpec, page: int) -> str:
+    if page <= 1:
+        return source.url
+    return urljoin(source.url, f"index_{page}.html")
+
+
+def _crawl_gwamcc_static(
+    source: SourceSpec,
+    limit: int,
+    progress: ProgressCallback | None = None,
+    should_stop: StopCallback | None = None,
+) -> list[RawNotice]:
+    notices: list[RawNotice] = []
+    seen: set[str] = set()
+    headers = {
+        "User-Agent": "Mozilla/5.0 AssetRadar/0.2",
+        "Referer": source.url,
+    }
+    with httpx.Client(timeout=20, follow_redirects=True, headers=headers, verify=False) as client:
+        for page in range(1, max(1, source.max_pages) + 1):
+            if should_stop and should_stop():
+                break
+            page_url = _gwamcc_page_url(source, page)
+            if progress:
+                progress("page", f"扫描长城国际资产处置公告第 {page} 页", {"source": source.name, "page": page})
+            response = client.get(page_url)
+            if response.status_code == 404:
+                break
+            response.raise_for_status()
+            response.encoding = response.encoding or "utf-8"
+            html_text = _response_text(response)
+            anchors = re.findall(
+                r"<a\b[^>]*href=[\"']([^\"']*?/cgwamc/zzczgg/\d+\.html)[\"'][^>]*title=[\"']([^\"']+)[\"'][^>]*>",
+                html_text,
+                flags=re.I,
+            )
+            if not anchors:
+                anchors = re.findall(
+                    r"<a\b[^>]*href=[\"']([^\"']*?/cgwamc/zzczgg/\d+\.html)[\"'][^>]*>([\s\S]*?)</a>",
+                    html_text,
+                    flags=re.I,
+                )
+            for href, label_html in anchors:
+                if should_stop and should_stop():
+                    return notices
+                title = _clean_text(_repair_mojibake(label_html))
+                if not title or not _is_asset_like_title(source, title):
+                    continue
+                url = urljoin(source.url, html.unescape(href))
+                if url in seen:
+                    continue
+                seen.add(url)
+                notice = RawNotice(
+                    source_platform=source.name,
+                    source_url=url,
+                    title=title[:180],
+                    notice_date=None,
+                    raw_text=title,
+                    amount_text=_extract_amount_text(title),
+                    disposal_agency=source.name,
+                    city=extract_city_from_text(title),
+                    metadata={
+                        "source_id": source.source_id,
+                        "source_type": source.source_type,
+                        "scan_mode": "gwamcc_static_list",
+                        "source_scan_llm_used": False,
+                    },
+                )
+                notices.append(notice)
+                if progress:
+                    progress("notice", f"发现资产线索：{title[:80]}", {"source": source.name, "count": len(notices)})
+                if len(notices) >= limit:
+                    return notices
+    return notices
+
+
 def _crawl_cinda_api(
     source: SourceSpec,
     limit: int,
@@ -370,6 +600,16 @@ def crawl_source(
         if progress:
             progress("source_done", f"完成扫描：{source.name}，发现 {len(notices)} 条", {"source": source.name, "count": len(notices)})
         return notices
+    if source.source_id == "coamc_orient_disposal":
+        notices = _crawl_coamc_notice(source, limit=limit, progress=progress, should_stop=should_stop)
+        if progress:
+            progress("source_done", f"完成扫描：{source.name}，发现 {len(notices)} 条", {"source": source.name, "count": len(notices)})
+        return notices
+    if source.source_id == "gwamcc_international_disposal":
+        notices = _crawl_gwamcc_static(source, limit=limit, progress=progress, should_stop=should_stop)
+        if progress:
+            progress("source_done", f"完成扫描：{source.name}，发现 {len(notices)} 条", {"source": source.name, "count": len(notices)})
+        return notices
     headers = {
         "User-Agent": "Mozilla/5.0 AssetRadar/0.2",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -378,21 +618,22 @@ def crawl_source(
         response = client.get(source.url)
         response.raise_for_status()
         response.encoding = response.encoding or "utf-8"
-        page_urls = _discover_page_urls(source, response.text) if source.source_type == "amc_notice" else [source.url]
+        first_html = _response_text(response)
+        page_urls = _discover_page_urls(source, first_html) if source.source_type == "amc_notice" else [source.url]
         notices: list[RawNotice] = []
         seen: set[str] = set()
         for page_index, page_url in enumerate(page_urls, start=1):
             if should_stop and should_stop():
                 break
             if page_index == 1:
-                html_text = response.text
+                html_text = first_html
             else:
                 if progress:
                     progress("page", f"扫描分页：{source.name} 第 {page_index} 页", {"source": source.name, "page": page_index})
                 page_response = client.get(page_url)
                 page_response.raise_for_status()
                 page_response.encoding = page_response.encoding or "utf-8"
-                html_text = page_response.text
+                html_text = _response_text(page_response)
             remaining = max(0, limit - len(notices))
             if remaining <= 0:
                 break

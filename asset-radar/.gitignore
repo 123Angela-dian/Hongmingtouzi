@@ -5,7 +5,10 @@ __pycache__/
 
 # Local runtime state and downloaded source materials
 data/*.json
+data/*.log
 data/attachments/
+data/logs/
+data/source_probe/
 *.log
 
 # Local credentials

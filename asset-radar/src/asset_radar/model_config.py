@@ -41,9 +41,14 @@ NODE_MODELS: dict[str, ModelProfile] = {
         model="z-ai/glm-5.2",
         purpose="ambiguous duplicate and same-asset update judgment",
     ),
+    "source_taxonomy_node": ModelProfile(
+        provider="cherryin",
+        model="z-ai/glm-5.2",
+        purpose="dropdown/category business relevance classification",
+    ),
     "detailed_screening_node": ModelProfile(
         provider="cherryin",
-        model="anthropic/claude-opus-4.8",
+        model="openai/gpt-5.6-luna",
         purpose="high-stakes trackability scoring and rationale",
     ),
     "asset_pool_update_node": ModelProfile(
@@ -55,6 +60,11 @@ NODE_MODELS: dict[str, ModelProfile] = {
         provider="cherryin",
         model="deepseek/deepseek-v4-pro",
         purpose="reader-friendly announcement detail restructuring",
+    ),
+    "asset_readability_reviewer_node": ModelProfile(
+        provider="cherryin",
+        model="z-ai/glm-5.2",
+        purpose="asset pool readability and noise quality gate",
     ),
     "interest_alert_node": ModelProfile(
         provider="cherryin",

@@ -20,7 +20,7 @@ C:\Users\HP\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\pyth
 $env:LANGSMITH_TRACING="true"
 $env:LANGSMITH_PROJECT="asset radar"
 $env:LANGSMITH_PROJECT_ID="9d5f165c-bef9-4bb8-882f-e3da1ea31491"
-$env:LANGSMITH_API_KEY="..."
+$env:LANGSMITH_API_KEY="replace_me"
 ```
 
 Optional:
@@ -56,7 +56,7 @@ The workflow routes nodes to CherryIN models as follows:
 | `coarse_filter_node` | `deepseek/deepseek-v4-pro` |
 | `dedupe_node` simple case | `deepseek/deepseek-v4-pro` |
 | `dedupe_node` complex case | `z-ai/glm-5.2` |
-| `detailed_screening_node` | `anthropic/claude-opus-4.8` |
+| `detailed_screening_node` | `openai/gpt-5.6-luna` |
 | `asset_pool_update_node` | `openai/gpt-4o-mini` |
 | `interest_alert_node` | `deepseek/deepseek-v4-pro` |
 | report generation / deep analysis | `anthropic/claude-opus-4.8` |
@@ -65,7 +65,7 @@ Runtime secrets are read from environment variables and are not stored in this
 repository:
 
 ```powershell
-$env:CHERRYIN_API_KEY="..."
+$env:CHERRYIN_API_KEY="replace_me"
 $env:CHERRYIN_BASE_URL="https://open.cherryin.net/v1"
 ```
 

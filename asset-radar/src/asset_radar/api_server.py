@@ -10,8 +10,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .crawler import crawl_default_sources
-from .llm_analysis import structure_notice_detail_with_llm
+from .asset_tags import apply_asset_tags
+from .crawler import crawl_default_sources, enrich_notice_detail
+from .llm_analysis import review_asset_readability_with_glm, structure_notice_detail_with_llm
 from .models import AssetRecord, RawNotice
 from .rules import extract_city_from_text
 from .sources import DEFAULT_SOURCES
@@ -23,6 +24,7 @@ from .workflow import run_asset_radar_workflow
 ROOT = Path(__file__).resolve().parents[2]
 STORE_PATH = ROOT / "data" / "asset_pool.local.json"
 LAST_SCAN_PATH = ROOT / "data" / "last_scan.local.json"
+SERVER_STARTED_AT = datetime.utcnow().isoformat()
 RUNS: dict[str, dict] = {}
 RUNS_LOCK = threading.Lock()
 SOURCE_IDS = {source.source_id for source in DEFAULT_SOURCES}
@@ -50,6 +52,7 @@ def _record_to_api(record: AssetRecord) -> dict:
         "summary": record.extracted_summary,
         "detail_text": record.detail_text or record.raw_text,
         "detail_sections": record.detail_sections or [],
+        "tags": record.asset_tags or [],
         "attachments": attachments,
         "status": status,
         "score": f"{score} / {status}" if score is not None else status,
@@ -114,7 +117,22 @@ def _payload(records: list[AssetRecord], alerts: list[str] | None = None, raw_co
 
 
 def _ensure_record_detail_sections(record: AssetRecord) -> AssetRecord:
-    if record.detail_sections:
+    source_text = f"{record.source_platform} {record.source_url} {record.detail_text}"
+    is_coamc = "东方资产" in source_text or "sales.coamc.com.cn" in source_text
+    has_readable_sections = bool(
+        record.detail_sections
+        and any((section.get("title") and section.get("content")) for section in record.detail_sections)
+    )
+    has_bad_detail_text = (
+        "返回中国东方营销网站首页" in source_text
+        or "Document " in source_text[:200]
+        or "The handshake operation timed out" in source_text
+    )
+    needs_refresh = (
+        not has_readable_sections
+        or has_bad_detail_text
+    )
+    if not needs_refresh:
         return record
     notice = RawNotice(
         source_platform=record.source_platform,
@@ -129,7 +147,17 @@ def _ensure_record_detail_sections(record: AssetRecord) -> AssetRecord:
         amount_text=record.amount_text,
         detail_text=record.detail_text,
         attachments=record.attachment_summaries,
+        metadata={"source_id": "coamc_orient_disposal" if is_coamc else ""},
     )
+    if is_coamc or not notice.detail_text:
+        notice.detail_text = ""
+        notice = enrich_notice_detail(
+            notice,
+            include_attachments=False,
+            detail_limit=16000,
+        )
+        record.detail_text = notice.detail_text or record.detail_text
+        record.raw_text = notice.raw_text or record.raw_text
     record.detail_sections = structure_notice_detail_with_llm(
         notice,
         {
@@ -139,6 +167,39 @@ def _ensure_record_detail_sections(record: AssetRecord) -> AssetRecord:
         },
     )
     record.node_models["detail_readability_node"] = "deepseek/deepseek-v4-pro"
+    review = review_asset_readability_with_glm(record)
+    record.node_models["asset_readability_reviewer_node"] = str(review.get("model_name") or "z-ai/glm-5.2")
+    record.notes.append(
+        f"{datetime.utcnow().isoformat()} detail_endpoint_readability_review "
+        f"passed={review.get('passed')} score={review.get('cleanliness_score')} "
+        f"reasons={' | '.join(review.get('reasons') or [])}"
+    )
+    if not review.get("passed"):
+        notice.detail_text = ""
+        notice = enrich_notice_detail(
+            notice,
+            include_attachments=False,
+            detail_limit=16000,
+        )
+        record.detail_text = notice.detail_text or record.detail_text
+        record.raw_text = notice.raw_text or record.raw_text
+        record.detail_sections = structure_notice_detail_with_llm(
+            notice,
+            {
+                "summary": record.extracted_summary,
+                "collateral_detail": record.collateral_detail,
+                "amount_text": record.amount_text,
+            },
+        )
+        second_review = review_asset_readability_with_glm(record)
+        record.notes.append(
+            f"{datetime.utcnow().isoformat()} detail_endpoint_readability_retry "
+            f"passed={second_review.get('passed')} score={second_review.get('cleanliness_score')} "
+            f"reasons={' | '.join(second_review.get('reasons') or [])}"
+        )
+    apply_asset_tags(record)
+    if is_coamc and not any("coamc_detail_refreshed_v3" in note for note in record.notes):
+        record.notes.append(f"{datetime.utcnow().isoformat()} coamc_detail_refreshed_v3")
     return record
 
 
@@ -372,6 +433,16 @@ class RadarHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/radar/health":
+            self._send_json({
+                "ok": True,
+                "pid": os.getpid(),
+                "root": str(ROOT),
+                "started_at": SERVER_STARTED_AT,
+                "source_ids": sorted(SOURCE_IDS),
+                "source_count": len(SOURCE_IDS),
+            })
+            return
         if parsed.path == "/api/radar/assets":
             store = JsonAssetStore(STORE_PATH)
             records = list(store.load().values())
@@ -443,7 +514,10 @@ def main() -> None:
     host = os.getenv("ASSET_RADAR_HOST", "127.0.0.1")
     port = int(os.getenv("ASSET_RADAR_PORT", "8030"))
     server = ThreadingHTTPServer((host, port), RadarHandler)
-    print(f"Asset Radar API serving http://{host}:{port}")
+    try:
+        print(f"Asset Radar API serving http://{host}:{port}")
+    except Exception:
+        pass
     server.serve_forever()
 
 

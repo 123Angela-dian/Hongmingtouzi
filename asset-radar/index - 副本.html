@@ -232,6 +232,13 @@
     .radar-table-wrap thead th { position: sticky; top: 0; z-index: 2; background: #f3f2f1; }
     .radar-table td { vertical-align: top; line-height: 1.6; }
     .radar-table .asset-name { color: var(--ms-blue); font-weight: 700; cursor: pointer; }
+    .radar-asset-tags { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 54px; }
+    .radar-asset-tag { display: inline-flex; align-items: center; justify-content: center; min-width: 42px; max-width: 82px; padding: 4px 8px; border-radius: 10px; font-size: 11px; line-height: 1.15; font-weight: 700; word-break: break-all; border: 1px solid transparent; }
+    .radar-asset-tag.green { background: #e6f4ea; color: #107c41; border-color: #b7dfc3; }
+    .radar-asset-tag.blue { background: #eaf4ff; color: #0f4c81; border-color: #b8d9f6; }
+    .radar-asset-tag.amber { background: #fff4ce; color: #8a5a00; border-color: #f2d57e; }
+    .radar-asset-tag.red { background: #fde7e9; color: #a4262c; border-color: #f4b9bd; }
+    .radar-asset-tag.gray { background: #f3f2f1; color: #605e5c; border-color: #d2d0ce; }
     .radar-detail-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
     .radar-detail-box { background:#fff; border:1px solid var(--border-gray); padding:14px; margin-bottom:14px; line-height:1.8; }
     .radar-detail-section { border-top: 1px solid var(--border-gray); padding-top: 12px; margin-top: 12px; }
@@ -241,13 +248,24 @@
     .radar-pool-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
     .radar-filter { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
     .radar-filter select { border: 1px solid var(--border-gray); background: #fff; height: 32px; padding: 0 8px; font-size: 12px; }
-    .radar-th-filter { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 2px; margin-left: 4px; font-size: 10px; }
-    .radar-th-filter.active { color: var(--ms-blue); font-weight: 700; }
+    .radar-filter-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .radar-filter-reset { display: inline-flex; align-items: center; gap: 6px; height: 32px; border: 1px solid var(--border-gray); background: #fff; color: var(--text-muted); padding: 0 10px; font-size: 12px; border-radius: 2px; cursor: pointer; }
+    .radar-filter-reset::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #c8c6c4; display: inline-block; }
+    .radar-filter-reset.active { color: var(--ms-blue); border-color: var(--ms-blue); background: #eef6ff; font-weight: 700; }
+    .radar-filter-reset.active::before { background: var(--ms-blue); }
+    .radar-table-actions { display: flex; justify-content: flex-end; margin: 2px 0 8px; }
+    .radar-table-wrap thead th.is-filtered { background: #eaf4ff; color: var(--ms-blue); box-shadow: inset 0 -2px 0 var(--ms-blue); }
+    .radar-th-filter { border: 1px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; padding: 2px 5px; margin-left: 4px; font-size: 10px; border-radius: 999px; line-height: 1.2; }
+    .radar-th-filter.active { color: #fff; background: var(--ms-blue); border-color: var(--ms-blue); font-weight: 700; font-size: 11px; }
     .radar-filter-menu { display: none; position: fixed; z-index: 360; width: 260px; max-height: 360px; overflow: auto; background: #fff; border: 1px solid var(--border-gray); box-shadow: 0 12px 28px rgba(0,0,0,.16); padding: 10px; font-size: 12px; }
     .radar-filter-menu.open { display: block; }
     .radar-filter-menu h4 { margin: 0 0 8px; font-size: 12px; color: var(--ms-blue); }
+    .radar-filter-search { position: sticky; top: -10px; z-index: 1; background: #fff; padding-bottom: 8px; }
+    .radar-filter-search input { width: 100%; height: 30px; border: 1px solid var(--border-gray); padding: 0 8px; font-size: 12px; outline: none; }
+    .radar-filter-search input:focus { border-color: var(--ms-blue); box-shadow: 0 0 0 1px var(--ms-blue); }
     .radar-filter-option { display: block; width: 100%; text-align: left; border: 0; background: #fff; padding: 7px 8px; border-bottom: 1px solid #f3f2f1; cursor: pointer; font-size: 12px; color: var(--text-main); }
     .radar-filter-option:hover, .radar-filter-option.active { background: #eef6ff; color: var(--ms-blue); }
+    .radar-filter-empty { display: none; padding: 16px 8px; color: var(--text-muted); text-align: center; }
     .radar-scan-modal-mask { display: none; position: fixed; inset: 0; z-index: 350; background: rgba(15,23,42,.32); align-items: center; justify-content: center; }
     .radar-scan-modal-mask.open { display: flex; }
     .radar-scan-modal { width: min(520px, calc(100vw - 32px)); background: #fff; border: 1px solid var(--border-gray); box-shadow: 0 20px 60px rgba(0,0,0,.22); padding: 18px; }
@@ -1142,11 +1160,16 @@
                             <button onclick="renderRadarPool('trackable', this)">可追踪资产库</button>
                             <button onclick="renderRadarPool('review', this)">人工复核池</button>
                         </div>
-                        <label class="radar-filter">来源
-                            <select id="radar-source-filter" onchange="setRadarSourceFilter(this.value)">
-                                <option value="all">全部来源</option>
-                            </select>
-                        </label>
+                        <div class="radar-filter-tools">
+                            <label class="radar-filter">来源
+                                <select id="radar-source-filter" onchange="setRadarSourceFilter(this.value)">
+                                    <option value="all">全部来源</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="radar-table-actions">
+                        <button class="radar-filter-reset" id="radar-filter-reset" onclick="resetRadarTableFilters()">一键还原筛选</button>
                     </div>
                     <div class="radar-table-wrap">
                         <table class="radar-table">
@@ -1157,7 +1180,7 @@
                                     <th>来源 <button class="radar-th-filter" data-field="source" onclick="openRadarColumnFilter(event, 'source')">▼</button></th>
                                     <th>城市/区域 <button class="radar-th-filter" data-field="city" onclick="openRadarColumnFilter(event, 'city')">▼</button></th>
                                     <th>抵质押物/权益 <button class="radar-th-filter" data-field="collateral" onclick="openRadarColumnFilter(event, 'collateral')">▼</button></th>
-                                    <th>状态 <button class="radar-th-filter" data-field="status" onclick="openRadarColumnFilter(event, 'status')">▼</button></th>
+                                    <th>标签 <button class="radar-th-filter" data-field="tags" onclick="openRadarColumnFilter(event, 'tags')">▼</button></th>
                                     <th>节点判断 <button class="radar-th-filter" data-field="score" onclick="openRadarColumnFilter(event, 'score')">▼</button></th>
                                     <th>关注 <button class="radar-th-filter" data-field="watched" onclick="openRadarColumnFilter(event, 'watched')">▼</button></th>
                                 </tr>
@@ -1238,6 +1261,8 @@
                 <label><input type="checkbox" id="radar-source-all" checked onchange="toggleRadarSourceAll()">所有来源</label>
                 <label><input type="checkbox" class="radar-source-option" value="citic_amc_asset_disposal" checked onchange="syncRadarSourceAll()">中信</label>
                 <label><input type="checkbox" class="radar-source-option" value="cinda_amc_asset_disposal" checked onchange="syncRadarSourceAll()">信达</label>
+                <label><input type="checkbox" class="radar-source-option" value="coamc_orient_disposal" checked onchange="syncRadarSourceAll()">东方资产</label>
+                <label><input type="checkbox" class="radar-source-option" value="gwamcc_international_disposal" checked onchange="syncRadarSourceAll()">长城国际</label>
                 <label><input type="checkbox" class="radar-source-option" value="ali_auction" checked onchange="syncRadarSourceAll()">阿里法拍</label>
                 <label><input type="checkbox" class="radar-source-option" value="jd_auction" checked onchange="syncRadarSourceAll()">京东法拍</label>
             </div>
@@ -1536,13 +1561,13 @@
     let radarCurrentPool = 'scan';
     let radarSourceFilter = 'all';
     let radarPendingScanButton = null;
-    const radarColumnFilters = { name: 'all', source: 'all', city: 'all', collateral: 'all', status: 'all', score: 'all', watched: 'all' };
+    const radarColumnFilters = { name: 'all', source: 'all', city: 'all', collateral: 'all', tags: 'all', score: 'all', watched: 'all' };
     const radarColumnLabels = {
         name: '资产/项目',
         source: '来源',
         city: '城市/区域',
         collateral: '抵质押物/权益',
-        status: '状态',
+        tags: '标签',
         score: '节点判断',
         watched: '关注'
     };
@@ -1573,8 +1598,70 @@
         `).join('');
     }
 
+    function getRadarAssetTagText(asset) {
+        const detailSections = (asset.detail_sections || [])
+            .map(section => `${section.title || ''} ${section.content || ''}`)
+            .join(' ');
+        return [
+            asset.name,
+            asset.source,
+            asset.city,
+            asset.collateral,
+            asset.summary,
+            asset.detail_text,
+            detailSections
+        ].filter(Boolean).join(' ');
+    }
+
+    function addRadarAssetTag(tags, seen, label, tone) {
+        if (seen.has(label)) return;
+        seen.add(label);
+        tags.push({ label, tone });
+    }
+
+    function getRadarAssetTags(asset) {
+        const backendTags = Array.isArray(asset.tags) && asset.tags.length ? asset.tags : (Array.isArray(asset.asset_tags) ? asset.asset_tags : []);
+        if (backendTags.length) {
+            return backendTags.map(tag => {
+                if (typeof tag === 'string') return { label: tag, tone: 'gray' };
+                return {
+                    label: tag.label || tag.name || '待识别',
+                    tone: tag.tone || tag.color || 'gray'
+                };
+            }).slice(0, 6);
+        }
+        const text = getRadarAssetTagText(asset);
+        const tags = [];
+        const seen = new Set();
+        const has = pattern => pattern.test(text);
+
+        if (has(/土地|国有土地|工业用地|建设用地|土地使用权|土地证/)) addRadarAssetTag(tags, seen, has(/抵押|抵质押|质押|担保物权/) ? '土地抵押' : '土地权益', 'green');
+        if (has(/房产|房地产|不动产|建筑物|厂房|商铺|写字楼|办公楼|住宅|公寓|酒店|商业用房|车库|仓库/)) addRadarAssetTag(tags, seen, has(/抵押|抵质押|质押|担保物权/) ? '房产抵押' : '房产', 'green');
+        if (has(/在建工程|工程项目|开发项目|施工|竣工/)) addRadarAssetTag(tags, seen, '在建工程', 'green');
+        if (has(/担保|保证|连带责任|保证人|抵押担保|质押担保/)) addRadarAssetTag(tags, seen, '担保', 'amber');
+        if (has(/股权|股票|股份|基金份额|合伙份额|出资份额/)) addRadarAssetTag(tags, seen, '股权/份额', 'blue');
+        if (has(/债权|本金|利息|不良债权|金融债权|应收账款/)) addRadarAssetTag(tags, seen, '债权', 'blue');
+        if (has(/资产包|多户|多项资产|批量|户债权|户资产/)) addRadarAssetTag(tags, seen, '资产包', 'amber');
+        if (has(/招商|招募|推介/)) addRadarAssetTag(tags, seen, '招商', 'amber');
+        if (has(/拍卖|竞价|挂牌|司法拍卖|变卖|降价/)) addRadarAssetTag(tags, seen, '竞价', 'amber');
+        if (has(/查封|冻结|破产|清算|诉讼|执行|瑕疵|占用|租赁|风险/)) addRadarAssetTag(tags, seen, '风险提示', 'red');
+
+        if (!tags.length) addRadarAssetTag(tags, seen, '待识别', 'gray');
+        if (tags.length > 4) {
+            return [...tags.slice(0, 4), { label: `+${tags.length - 4}`, tone: 'gray' }];
+        }
+        return tags;
+    }
+
+    function renderRadarAssetTags(asset) {
+        return getRadarAssetTags(asset).map(tag => (
+            `<span class="radar-asset-tag ${tag.tone}">${escapeHtml(tag.label)}</span>`
+        )).join('');
+    }
+
     function getRadarColumnValue(asset, field) {
         if (field === 'watched') return asset.watched ? '已关注' : '未关注';
+        if (field === 'tags') return getRadarAssetTags(asset).map(tag => tag.label).join('、');
         const value = asset[field];
         return String(value || '-');
     }
@@ -1583,15 +1670,38 @@
         if (radarSourceFilter !== 'all' && (asset.source || '-') !== radarSourceFilter) return false;
         return Object.entries(radarColumnFilters).every(([field, value]) => {
             if (value === 'all') return true;
+            if (field === 'tags') {
+                return getRadarAssetTags(asset).some(tag => tag.label === value);
+            }
             return getRadarColumnValue(asset, field) === value;
         });
+    }
+
+    function hasActiveRadarTableFilters() {
+        return radarSourceFilter !== 'all' || Object.values(radarColumnFilters).some(value => value && value !== 'all');
+    }
+
+    function updateRadarFilterResetState() {
+        const resetBtn = document.getElementById('radar-filter-reset');
+        if (!resetBtn) return;
+        const active = hasActiveRadarTableFilters();
+        resetBtn.classList.toggle('active', active);
+        resetBtn.title = active ? '已启用筛选，点击还原全部筛选条件' : '当前没有启用筛选';
     }
 
     function refreshRadarHeaderFilterState() {
         document.querySelectorAll('.radar-th-filter').forEach(btn => {
             const field = btn.getAttribute('data-field');
-            btn.classList.toggle('active', field && radarColumnFilters[field] && radarColumnFilters[field] !== 'all');
+            const active = Boolean(field && radarColumnFilters[field] && radarColumnFilters[field] !== 'all');
+            btn.classList.toggle('active', active);
+            btn.innerText = active ? '已筛' : '▼';
+            btn.title = active
+                ? `${radarColumnLabels[field] || '筛选'}：${radarColumnFilters[field]}`
+                : `筛选${radarColumnLabels[field] || ''}`;
+            const th = btn.closest('th');
+            if (th) th.classList.toggle('is-filtered', active);
         });
+        updateRadarFilterResetState();
     }
 
     function renderRadarPool(pool = 'initial', btn = null) {
@@ -1615,7 +1725,7 @@
                 <td>${escapeHtml(asset.source || '-')}</td>
                 <td>${escapeHtml(asset.city || '-')}</td>
                 <td>${escapeHtml(asset.collateral || '-')}</td>
-                <td><span class="tag ${String(asset.status || '').includes('复核') || String(asset.status || '').includes('跟进') ? 'medium' : 'status'}">${escapeHtml(asset.status)}</span></td>
+                <td><div class="radar-asset-tags">${renderRadarAssetTags(asset)}</div></td>
                 <td>${escapeHtml(asset.score)}</td>
                 <td><button class="watch-btn ${asset.watched ? 'active' : ''}" onclick="toggleRadarInterestById('${pool}', '${asset.asset_id}')">${asset.watched ? '已关注' : '关注'}</button></td>
             </tr>
@@ -1633,6 +1743,7 @@
             `<option value="${escapeHtml(source)}" ${source === radarSourceFilter ? 'selected' : ''}>${escapeHtml(source)}</option>`
         )).join('');
         select.value = radarSourceFilter;
+        updateRadarFilterResetState();
     }
 
     function setRadarSourceFilter(source) {
@@ -1640,30 +1751,82 @@
         renderRadarPool(radarCurrentPool, document.querySelector('.asset-pool-tabs button.active'));
     }
 
+    function normalizeRadarFilterText(value) {
+        return String(value || '').toLowerCase().replace(/\s+/g, '');
+    }
+
+    function radarFuzzyMatch(label, query) {
+        const source = normalizeRadarFilterText(label);
+        const target = normalizeRadarFilterText(query);
+        if (!target) return true;
+        if (source.includes(target)) return true;
+        let cursor = 0;
+        for (const char of target) {
+            cursor = source.indexOf(char, cursor);
+            if (cursor === -1) return false;
+            cursor += 1;
+        }
+        return true;
+    }
+
+    function filterRadarFilterOptions(query) {
+        const menu = document.getElementById('radarFilterMenu');
+        if (!menu) return;
+        const options = [...menu.querySelectorAll('[data-radar-filter-option]')];
+        let visibleCount = 0;
+        options.forEach(option => {
+            const pinned = option.getAttribute('data-radar-filter-pinned') === '1';
+            const label = option.getAttribute('data-radar-filter-label') || option.innerText || '';
+            const visible = pinned || radarFuzzyMatch(label, query);
+            option.style.display = visible ? 'block' : 'none';
+            if (visible && !pinned) visibleCount += 1;
+        });
+        const empty = menu.querySelector('.radar-filter-empty');
+        if (empty) empty.style.display = query && visibleCount === 0 ? 'block' : 'none';
+    }
+
     function openRadarColumnFilter(event, field) {
         event.stopPropagation();
         const menu = document.getElementById('radarFilterMenu');
         if (!menu) return;
         const rows = radarAssets[radarCurrentPool] || [];
-        const values = [...new Set(rows.map(asset => getRadarColumnValue(asset, field)))].filter(Boolean).sort();
+        const values = field === 'tags'
+            ? [...new Set(rows.flatMap(asset => getRadarAssetTags(asset).map(tag => tag.label)))].filter(Boolean).sort()
+            : [...new Set(rows.map(asset => getRadarColumnValue(asset, field)))].filter(Boolean).sort();
         const current = radarColumnFilters[field] || 'all';
         const options = ['all', ...values].slice(0, 101);
         menu.innerHTML = `
             <h4>${escapeHtml(radarColumnLabels[field] || '筛选')}</h4>
+            <div class="radar-filter-search">
+                <input type="text" placeholder="搜索筛选项" oninput="filterRadarFilterOptions(this.value)" onclick="event.stopPropagation()">
+            </div>
             ${options.map(value => {
                 const label = value === 'all' ? '全部' : value;
                 const shortLabel = label.length > 46 ? `${label.slice(0, 46)}...` : label;
-                return `<button class="radar-filter-option ${value === current ? 'active' : ''}" title="${escapeHtml(label)}" onclick="setRadarColumnFilter('${field}', decodeURIComponent('${encodeURIComponent(value)}'))">${escapeHtml(shortLabel)}</button>`;
+                return `<button class="radar-filter-option ${value === current ? 'active' : ''}" data-radar-filter-option="1" data-radar-filter-label="${escapeHtml(label)}" data-radar-filter-pinned="${value === 'all' ? '1' : '0'}" title="${escapeHtml(label)}" onclick="setRadarColumnFilter('${field}', decodeURIComponent('${encodeURIComponent(value)}'))">${escapeHtml(shortLabel)}</button>`;
             }).join('')}
+            <div class="radar-filter-empty">没有匹配的筛选项</div>
         `;
         const rect = event.currentTarget.getBoundingClientRect();
         menu.style.left = `${Math.min(rect.left, window.innerWidth - 280)}px`;
         menu.style.top = `${rect.bottom + 6}px`;
         menu.classList.add('open');
+        const input = menu.querySelector('.radar-filter-search input');
+        if (input) setTimeout(() => input.focus(), 0);
     }
 
     function setRadarColumnFilter(field, value) {
         radarColumnFilters[field] = value || 'all';
+        const menu = document.getElementById('radarFilterMenu');
+        if (menu) menu.classList.remove('open');
+        renderRadarPool(radarCurrentPool, document.querySelector('.asset-pool-tabs button.active'));
+    }
+
+    function resetRadarTableFilters() {
+        radarSourceFilter = 'all';
+        Object.keys(radarColumnFilters).forEach(field => {
+            radarColumnFilters[field] = 'all';
+        });
         const menu = document.getElementById('radarFilterMenu');
         if (menu) menu.classList.remove('open');
         renderRadarPool(radarCurrentPool, document.querySelector('.asset-pool-tabs button.active'));
@@ -1734,14 +1897,26 @@
         if (index >= 0) openRadarAssetDetail(pool, index);
     }
 
+    function hasReadableRadarDetailSections(asset) {
+        return Boolean(asset?.detail_sections?.some(section => section?.title && section?.content));
+    }
+
+    function shouldRefreshRadarDetailOnOpen(asset) {
+        const sourceText = `${asset?.source || ''} ${asset?.source_url || ''} ${asset?.original_url || ''} ${asset?.detail_text || ''}`;
+        const hasBadDetailText = sourceText.includes('返回中国东方营销网站首页')
+            || sourceText.includes('Document ')
+            || sourceText.includes('The handshake operation timed out');
+        return !hasReadableRadarDetailSections(asset) || hasBadDetailText;
+    }
+
     async function ensureRadarDetailSections(pool, assetId) {
         if (!assetId) return;
         const rows = radarAssets[pool] || [];
         const asset = rows.find(item => item.asset_id === assetId);
-        if (!asset || (asset.detail_sections && asset.detail_sections.length)) return;
+        if (!asset || !shouldRefreshRadarDetailOnOpen(asset)) return;
         const detailEl = document.getElementById('radar-detail-text');
         if (detailEl) {
-            detailEl.insertAdjacentHTML('afterbegin', '<div class="radar-detail-section"><h4>DeepSeek整理中</h4><p>正在把公告正文整理成可读结构，完成后会自动刷新本页内容。</p></div>');
+            detailEl.insertAdjacentHTML('afterbegin', '<div class="radar-detail-section radar-detail-loading"><h4>公告详情整理中</h4><p>正在把公告正文整理成可读结构，完成后会自动刷新本页内容。</p></div>');
         }
         try {
             const res = await fetch(`${RADAR_API_BASE}/api/radar/asset-detail?asset_id=${encodeURIComponent(assetId)}`);
@@ -1755,6 +1930,7 @@
                 detailEl.innerHTML = renderDetailSections(asset);
             }
         } catch (err) {
+            detailEl?.querySelector('.radar-detail-loading')?.remove();
             appendRadarProgress({ stage: 'detail', message: `详情整理暂未完成：${err.message || err}` });
         }
     }

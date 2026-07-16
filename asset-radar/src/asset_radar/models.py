@@ -72,6 +72,7 @@ class AssetRecord(BaseModel):
     raw_text: str = ""
     detail_text: str = ""
     detail_sections: list[dict[str, str]] = Field(default_factory=list)
+    asset_tags: list[dict[str, str]] = Field(default_factory=list)
     extracted_summary: str = ""
     collateral_detail: str = ""
     attachment_summaries: list[dict[str, str]] = Field(default_factory=list)

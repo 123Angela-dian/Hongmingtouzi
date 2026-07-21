@@ -226,7 +226,29 @@ def get_eyes_llm() -> ChatOpenAI:
     return ChatOpenAI(**kwargs)
 
 
-@traceable(name="brain_llm_call", run_type="llm")
+def _process_llm_trace_inputs(inputs: dict) -> dict:
+    system_prompt = str(inputs.get("system_prompt") or "")
+    user_payload = str(inputs.get("user_payload") or "")
+    return {
+        "system_prompt_chars": len(system_prompt),
+        "system_prompt_preview": system_prompt[:2000],
+        "user_payload_chars": len(user_payload),
+        "user_payload_preview": user_payload[:12000],
+        "display_note": "Trace仅展示受限预览；模型实际接收完整上下文。",
+    }
+
+
+def _process_llm_trace_output(output: object) -> dict:
+    text = str(output or "")
+    return {"response_chars": len(text), "response_preview": text[:12000]}
+
+
+@traceable(
+    name="brain_llm_call",
+    run_type="llm",
+    process_inputs=_process_llm_trace_inputs,
+    process_outputs=_process_llm_trace_output,
+)
 def _invoke_brain(system_prompt: str, user_payload: str) -> str:
     llm = get_brain_llm()
     response = llm.invoke(
@@ -390,63 +412,302 @@ def _split_bullets(text: str) -> List[str]:
     return bullets or [text.strip()]
 
 
-@traceable(name="asset_agent_node", run_type="chain")
+def _process_master_inventory_output(output: object) -> dict:
+    inventory = dict(output or {})
+    return {
+        "project_id": inventory.get("project_id"),
+        "project_name": inventory.get("project_name"),
+        "counts": inventory.get("counts"),
+        "ai_relation_types": inventory.get("ai_relation_types"),
+        "inventory_complete": inventory.get("inventory_complete"),
+    }
+
+
+@traceable(name="01_database_inventory", run_type="retriever", process_outputs=_process_master_inventory_output)
+def _trace_master_inventory(project_id: int) -> dict:
+    from graph_rag import inventory_project
+
+    return inventory_project(project_id)
+
+
+@traceable(name="02_analysis_plan", run_type="chain")
+def _trace_master_plan(inventory: dict) -> dict:
+    from graph_rag import build_master_plan
+
+    return build_master_plan(inventory)
+
+
+def master_planner_node(state: ProjectState) -> ProjectState:
+    project_id = int(state.get("project_id") or 0)
+    if not project_id or state.get("data_source") != "cloud_mysql_ai":
+        return {
+            "master_inventory": {"source": state.get("data_source") or "uploaded_files", "inventory_complete": False},
+            "master_plan": {"strategy": "使用已装配的四维文本输入运行固定专业Agent。"},
+        }
+    inventory = _trace_master_inventory(project_id)
+    plan = _trace_master_plan(inventory)
+    return {
+        "project_name": inventory.get("project_name") or state.get("project_name", ""),
+        "master_inventory": inventory,
+        "master_plan": plan,
+    }
+
+
+TRACE_PREVIEW_ITEM_LIMIT = max(1, int(_env("TRACE_PREVIEW_ITEM_LIMIT", "8")))
+TRACE_PREVIEW_CHARS = max(120, int(_env("TRACE_PREVIEW_CHARS", "600")))
+TRACE_TOTAL_PREVIEW_CHARS = max(1000, int(_env("TRACE_TOTAL_PREVIEW_CHARS", "5000")))
+
+
+def _clip_trace_text(value: object, limit: int = TRACE_PREVIEW_CHARS) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _trace_lines(text: str, patterns: tuple[str, ...] = ()) -> list[str]:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if patterns:
+        lines = [line for line in lines if any(pattern in line for pattern in patterns)]
+    previews: list[str] = []
+    total_chars = 0
+    for line in lines:
+        preview = _clip_trace_text(line)
+        if len(previews) >= TRACE_PREVIEW_ITEM_LIMIT or total_chars + len(preview) > TRACE_TOTAL_PREVIEW_CHARS:
+            break
+        previews.append(preview)
+        total_chars += len(preview)
+    return previews
+
+
+def _process_context_trace_inputs(inputs: dict) -> dict:
+    sections = inputs.get("sections") or {}
+    return {
+        "agent": inputs.get("agent_name"),
+        "sections": {name: {"chars": len(str(text or "")), "preview": _trace_lines(str(text or ""))[:2]} for name, text in sections.items()},
+        "display_limits": {"items": TRACE_PREVIEW_ITEM_LIMIT, "chars_per_item": TRACE_PREVIEW_CHARS, "total_preview_chars": TRACE_TOTAL_PREVIEW_CHARS},
+    }
+
+
+def _context_manifest(agent_name: str, sections: dict[str, str]) -> dict:
+    combined = "\n".join(sections.values())
+    event_ids = list(dict.fromkeys(re.findall(r"事件#(\d+)", combined)))
+    evidence_ids = list(dict.fromkeys(re.findall(r"证据#(\d+)", combined)))
+    return {
+        "agent": agent_name,
+        "section_chars": {name: len(text) for name, text in sections.items()},
+        "event_count": len(event_ids),
+        "evidence_count": len(evidence_ids),
+        "event_id_preview": event_ids[:TRACE_PREVIEW_ITEM_LIMIT],
+        "evidence_id_preview": evidence_ids[:TRACE_PREVIEW_ITEM_LIMIT],
+        "fact_previews": _trace_lines(combined, ("状态=", "当前事实")),
+        "risk_previews": _trace_lines(combined, ("## 已识别风险", "[high]", "[critical]", "[medium]")),
+        "truncated_for_display": True,
+        "full_context_used_by_model": True,
+    }
+
+
+@traceable(name="01_context_selection", run_type="retriever", process_inputs=_process_context_trace_inputs)
+def _trace_context_selection(agent_name: str, sections: dict[str, str]) -> dict:
+    return _context_manifest(agent_name, sections)
+
+
+@traceable(name="02_evidence_and_conflict_check", run_type="chain", process_inputs=_process_context_trace_inputs)
+def _trace_evidence_and_conflict_check(agent_name: str, sections: dict[str, str]) -> dict:
+    combined = "\n".join(sections.values())
+    primary_refs = re.findall(r"(\d+):primary:(?:source|ai)", combined)
+    supporting_refs = re.findall(r"(\d+):supporting:(?:source|ai)", combined)
+    conflicting_refs = re.findall(r"(\d+):conflicting:(?:source|ai)", combined)
+    review_lines = _trace_lines(combined, ("need_review", "待审核", "conflicting"))
+    return {
+        "agent": agent_name,
+        "primary_evidence_count": len(set(primary_refs)),
+        "supporting_evidence_count": len(set(supporting_refs)),
+        "conflicting_evidence_count": len(set(conflicting_refs)),
+        "primary_evidence_preview": list(dict.fromkeys(primary_refs))[:TRACE_PREVIEW_ITEM_LIMIT],
+        "supporting_evidence_preview": list(dict.fromkeys(supporting_refs))[:TRACE_PREVIEW_ITEM_LIMIT],
+        "conflicting_evidence_preview": list(dict.fromkeys(conflicting_refs))[:TRACE_PREVIEW_ITEM_LIMIT],
+        "review_previews": review_lines,
+        "analysis_rule": "冲突证据只作为风险提示并进入审核，不自动覆盖原始事实。",
+    }
+
+
+def _process_agent_analysis_inputs(inputs: dict) -> dict:
+    payload = str(inputs.get("user_payload") or "")
+    context = dict(inputs.get("context_manifest") or {})
+    evidence = dict(inputs.get("evidence_check") or {})
+    compact_context = {
+        "agent": context.get("agent"),
+        "section_chars": context.get("section_chars"),
+        "event_count": context.get("event_count"),
+        "evidence_count": context.get("evidence_count"),
+        "event_id_preview": (context.get("event_id_preview") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+        "evidence_id_preview": (context.get("evidence_id_preview") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+        "fact_previews": [_clip_trace_text(item, 320) for item in (context.get("fact_previews") or [])[:3]],
+        "risk_previews": [_clip_trace_text(item, 320) for item in (context.get("risk_previews") or [])[:3]],
+    }
+    compact_evidence = {
+        "primary_evidence_count": evidence.get("primary_evidence_count"),
+        "supporting_evidence_count": evidence.get("supporting_evidence_count"),
+        "conflicting_evidence_count": evidence.get("conflicting_evidence_count"),
+        "conflicting_evidence_preview": (evidence.get("conflicting_evidence_preview") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+        "review_previews": [_clip_trace_text(item, 320) for item in (evidence.get("review_previews") or [])[:3]],
+    }
+    return {
+        "agent": inputs.get("agent_name"),
+        "task": inputs.get("task"),
+        "context_manifest": compact_context,
+        "evidence_check": compact_evidence,
+        "model_payload_chars": len(payload),
+        "model_payload_preview": payload[:8000],
+        "display_note": "完整文本已送入模型；Trace输入控制在约15,000字符内。",
+    }
+
+def _process_agent_analysis_output(output: object) -> dict:
+    text = str(output or "")
+    return {"analysis_chars": len(text), "analysis_preview": text[:TRACE_TOTAL_PREVIEW_CHARS]}
+
+
+@traceable(name="03_agent_analysis", run_type="chain", process_inputs=_process_agent_analysis_inputs, process_outputs=_process_agent_analysis_output)
+def _trace_agent_analysis(
+    agent_name: str,
+    task: str,
+    system_prompt: str,
+    user_payload: str,
+    context_manifest: dict,
+    evidence_check: dict,
+) -> str:
+    return _invoke_brain(system_prompt, user_payload)
+
+
+def _risk_level_for_finding(text: str) -> str:
+    if any(keyword in text for keyword in ("红线", "重大", "无法", "严重", "第一顺位", "查封", "冲突")):
+        return "high"
+    if any(keyword in text for keyword in ("风险", "不足", "偏高", "待核", "不确定", "限制")):
+        return "medium"
+    return "low"
+
+
+def _process_conclusion_inputs(inputs: dict) -> dict:
+    analysis_text = str(inputs.get("analysis_text") or "")
+    return {"agent": inputs.get("agent_name"), "analysis_chars": len(analysis_text), "analysis_preview": analysis_text[:TRACE_TOTAL_PREVIEW_CHARS]}
+
+
+@traceable(name="04_agent_conclusion", run_type="chain", process_inputs=_process_conclusion_inputs)
+def _trace_agent_conclusion(agent_name: str, analysis_text: str) -> dict:
+    patches = _split_bullets(analysis_text)
+    findings = []
+    for index, patch in enumerate(patches[:TRACE_PREVIEW_ITEM_LIMIT], start=1):
+        evidence_ids = list(dict.fromkeys(re.findall(r"(?:证据|evidence)[#：:\s]*(\d+)", patch, re.IGNORECASE)))
+        event_ids = list(dict.fromkeys(re.findall(r"(?:事件|event)[#：:\s]*(\d+)", patch, re.IGNORECASE)))
+        title, _, detail = patch.partition("：")
+        findings.append({
+            "finding_no": index,
+            "title": _clip_trace_text(title or patch, 160),
+            "risk_level": _risk_level_for_finding(patch),
+            "analysis_summary": _clip_trace_text(detail or patch),
+            "event_ids": event_ids[:TRACE_PREVIEW_ITEM_LIMIT],
+            "evidence_ids": evidence_ids[:TRACE_PREVIEW_ITEM_LIMIT],
+        })
+    return {"agent": agent_name, "patch_count": len(patches), "findings": findings, "patches": patches}
+
+
+def _process_dynamic_retrieval_output(output: object) -> dict:
+    payload = dict(output or {})
+    sections = payload.get("sections") or {}
+    report = payload.get("report") or {}
+    return {
+        "agent": report.get("agent"),
+        "task": report.get("task"),
+        "section_chars": {name: len(str(text or "")) for name, text in sections.items()},
+        "coverage": {
+            "events_scanned": report.get("events_scanned"),
+            "events_selected": report.get("events_selected"),
+            "evidences_scanned": report.get("evidences_scanned"),
+            "evidences_selected": report.get("evidences_selected"),
+            "graph_relations_scanned": report.get("graph_relations_scanned"),
+            "entity_relations_scanned": report.get("entity_relations_scanned"),
+            "raw_contents_evaluated_by_database": report.get("raw_contents_evaluated_by_database"),
+            "raw_keyword_matches": report.get("raw_keyword_matches"),
+            "raw_contents_selected_for_model": report.get("raw_contents_selected_for_model"),
+        },
+        "selected_event_id_preview": (report.get("selected_event_ids") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+        "selected_evidence_id_preview": (report.get("selected_evidence_ids") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+        "selected_raw_content_id_preview": (report.get("selected_raw_content_ids") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+        "selection_method": report.get("selection_method"),
+    }
+
+
+@traceable(name="01_context_selection", run_type="retriever", process_outputs=_process_dynamic_retrieval_output)
+def _trace_dynamic_context_selection(project_id: int, agent_name: str, master_plan: dict) -> dict:
+    from graph_rag import retrieve_agent_context
+
+    return retrieve_agent_context(project_id, agent_name)
+
+
+def _run_agent(
+    state: ProjectState,
+    agent_name: str,
+    task: str,
+    system_prompt: str,
+    fallback_sections: dict[str, str],
+) -> tuple[list[str], dict]:
+    project_id = int(state.get("project_id") or 0)
+    if project_id and state.get("data_source") == "cloud_mysql_ai":
+        retrieval = _trace_dynamic_context_selection(project_id, agent_name, state.get("master_plan", {}))
+        sections = dict(retrieval.get("sections") or {})
+        retrieval_report = dict(retrieval.get("report") or {})
+        context_manifest = {
+            "agent": agent_name,
+            "section_chars": {name: len(text) for name, text in sections.items()},
+            "event_count": retrieval_report.get("events_selected", 0),
+            "evidence_count": retrieval_report.get("evidences_selected", 0),
+            "event_id_preview": (retrieval_report.get("selected_event_ids") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+            "evidence_id_preview": (retrieval_report.get("selected_evidence_ids") or [])[:TRACE_PREVIEW_ITEM_LIMIT],
+            "fact_previews": _trace_lines("\n".join(sections.values()), ("[事实#",)),
+            "risk_previews": _trace_lines("\n".join(sections.values()), ("[风险#",)),
+        }
+    else:
+        sections = fallback_sections
+        context_manifest = _trace_context_selection(agent_name, sections)
+        retrieval_report = {
+            "agent": agent_name,
+            "mode": "preassembled_context",
+            "full_structured_scan_completed": False,
+            "selected_event_ids": context_manifest.get("event_id_preview", []),
+            "selected_evidence_ids": context_manifest.get("evidence_id_preview", []),
+        }
+    evidence_check = _trace_evidence_and_conflict_check(agent_name, sections)
+    user_payload = "\n\n".join(f"【{title}】\n{text}" for title, text in sections.items())
+    analysis_text = _trace_agent_analysis(agent_name, task, system_prompt, user_payload, context_manifest, evidence_check)
+    conclusion = _trace_agent_conclusion(agent_name, analysis_text)
+    return list(conclusion["patches"]), retrieval_report
+
+
 def asset_agent_node(state: ProjectState) -> ProjectState:
     logger.info("Asset agent started")
-    user_payload = f"""
-【资产明细与抵押物清册】
-{state.get("asset_and_mortgage_data", "")}
-"""
-    result = _invoke_brain(ASSET_PROMPT, user_payload)
-    patches = _split_bullets(result)
+    patches, report = _run_agent(state, "asset_agent", "核验资产权属、抵押质押、处置限制和资产价值风险", ASSET_PROMPT, {"资产明细与抵押物清册": state.get("asset_and_mortgage_data", "")})
     logger.info("Asset agent finished | patches=%s", len(patches))
-    return {"asset_patches": patches}
+    return {"asset_patches": patches, "asset_retrieval_report": report}
 
 
-@traceable(name="economic_agent_node", run_type="chain")
 def economic_agent_node(state: ProjectState) -> ProjectState:
     logger.info("Economic agent started")
-    user_payload = f"""
-【货值与开发成本数据】
-{state.get("financial_and_cost_data", "")}
-"""
-    result = _invoke_brain(ECONOMIC_PROMPT, user_payload)
-    patches = _split_bullets(result)
+    patches, report = _run_agent(state, "economic_agent", "核验货值、市场价格、销售去化和回款风险", ECONOMIC_PROMPT, {"货值与开发成本数据": state.get("financial_and_cost_data", "")})
     logger.info("Economic agent finished | patches=%s", len(patches))
-    return {"economic_patches": patches}
+    return {"economic_patches": patches, "economic_retrieval_report": report}
 
 
-@traceable(name="legal_agent_node", run_type="chain")
 def legal_agent_node(state: ProjectState) -> ProjectState:
     logger.info("Legal agent started")
-    user_payload = f"""
-【股权与历史沿革数据】
-{state.get("equity_and_history_data", "")}
-
-【金融机构债权与查封明细】
-{state.get("creditor_and_seizure_data", "")}
-"""
-    result = _invoke_brain(LEGAL_PROMPT, user_payload)
-    patches = _split_bullets(result)
+    patches, report = _run_agent(state, "legal_agent", "核验股权控制、债权顺位、查封诉讼和担保实现风险", LEGAL_PROMPT, {"股权与历史沿革数据": state.get("equity_and_history_data", ""), "金融机构债权与查封明细": state.get("creditor_and_seizure_data", "")})
     logger.info("Legal agent finished | patches=%s", len(patches))
-    return {"legal_patches": patches}
+    return {"legal_patches": patches, "legal_retrieval_report": report}
 
 
-@traceable(name="financial_node", run_type="chain")
 def financial_node(state: ProjectState) -> ProjectState:
     logger.info("Financial agent started")
-    user_payload = f"""
-【货值与开发成本数据】
-{state.get("financial_and_cost_data", "")}
-
-【资产明细与抵押物清册】
-{state.get("asset_and_mortgage_data", "")}
-"""
-    result = _invoke_brain(FINANCIAL_PROMPT, user_payload)
-    patches = _split_bullets(result)
+    patches, report = _run_agent(state, "financial_agent", "核验成本、税费、利润、安全垫和资金缺口", FINANCIAL_PROMPT, {"货值与开发成本数据": state.get("financial_and_cost_data", ""), "资产明细与抵押物清册": state.get("asset_and_mortgage_data", "")})
     logger.info("Financial agent finished | patches=%s", len(patches))
-    return {"financial_patches": patches}
-
+    return {"financial_patches": patches, "financial_retrieval_report": report}
 
 RISK_DEDUCTION_MATRIX: tuple[tuple[str, int], ...] = (
     ("交叉质押", 20),
@@ -581,19 +842,133 @@ def calculate_pcs_breakdown(
     return pcs_score, breakdown
 
 
-@traceable(name="closer_node", run_type="chain")
+def _process_findings_inputs(inputs: dict) -> dict:
+    return {
+        "asset_patch_count": len(inputs.get("asset_patches") or []),
+        "economic_patch_count": len(inputs.get("economic_patches") or []),
+        "legal_patch_count": len(inputs.get("legal_patches") or []),
+        "financial_patch_count": len(inputs.get("financial_patches") or []),
+        "previews": {
+            "asset": [_clip_trace_text(item) for item in (inputs.get("asset_patches") or [])[:TRACE_PREVIEW_ITEM_LIMIT]],
+            "economic": [_clip_trace_text(item) for item in (inputs.get("economic_patches") or [])[:TRACE_PREVIEW_ITEM_LIMIT]],
+            "legal": [_clip_trace_text(item) for item in (inputs.get("legal_patches") or [])[:TRACE_PREVIEW_ITEM_LIMIT]],
+            "financial": [_clip_trace_text(item) for item in (inputs.get("financial_patches") or [])[:TRACE_PREVIEW_ITEM_LIMIT]],
+        },
+    }
+
+
+@traceable(name="01_consolidate_findings", run_type="chain", process_inputs=_process_findings_inputs)
+def _trace_consolidate_findings(
+    asset_patches: list[str],
+    economic_patches: list[str],
+    legal_patches: list[str],
+    financial_patches: list[str],
+) -> dict:
+    return {
+        "total_findings": len(asset_patches) + len(economic_patches) + len(legal_patches) + len(financial_patches),
+        "dimension_counts": {
+            "asset": len(asset_patches),
+            "economic": len(economic_patches),
+            "legal": len(legal_patches),
+            "financial": len(financial_patches),
+        },
+        "high_risk_previews": [
+            {"dimension": dimension, "finding": _clip_trace_text(patch)}
+            for dimension, patches in (
+                ("asset", asset_patches),
+                ("economic", economic_patches),
+                ("legal", legal_patches),
+                ("financial", financial_patches),
+            )
+            for patch in patches
+            if _risk_level_for_finding(patch) == "high"
+        ][:TRACE_PREVIEW_ITEM_LIMIT],
+    }
+
+
+@traceable(name="02_calculate_pcs", run_type="chain", process_inputs=_process_findings_inputs)
+def _trace_calculate_pcs(
+    asset_patches: list[str],
+    economic_patches: list[str],
+    legal_patches: list[str],
+    financial_patches: list[str],
+) -> dict:
+    pcs_score, pcs_breakdown = calculate_pcs_breakdown(asset_patches, economic_patches, legal_patches, financial_patches)
+    return {
+        "starting_score": 100,
+        "dimension_deductions": pcs_breakdown,
+        "total_deduction": pcs_breakdown.get("total_deduction", 0),
+        "final_score": pcs_score,
+    }
+
+
+def _process_coverage_output(output: object) -> dict:
+    coverage = dict(output or {})
+    return {
+        "project_id": coverage.get("project_id"),
+        "project_name": coverage.get("project_name"),
+        "agents_completed": coverage.get("agents_completed"),
+        "structured_scan": coverage.get("structured_scan"),
+        "raw_content_scan": coverage.get("raw_content_scan"),
+        "unprocessed_structured_records": coverage.get("unprocessed_structured_records"),
+        "interpretation": coverage.get("interpretation"),
+    }
+
+
+@traceable(name="03_coverage_audit", run_type="chain", process_outputs=_process_coverage_output)
+def _trace_coverage_report(inventory: dict, reports: list[dict]) -> dict:
+    from graph_rag import combine_coverage
+
+    return combine_coverage(inventory, reports)
+
+
+def _process_decision_inputs(inputs: dict) -> dict:
+    payload = str(inputs.get("user_payload") or "")
+    findings = dict(inputs.get("findings_summary") or {})
+    pcs = dict(inputs.get("pcs_summary") or {})
+    return {
+        "pcs_summary": {
+            "starting_score": pcs.get("starting_score"),
+            "dimension_deductions": pcs.get("dimension_deductions"),
+            "total_deduction": pcs.get("total_deduction"),
+            "final_score": pcs.get("final_score"),
+        },
+        "findings_summary": {
+            "total_findings": findings.get("total_findings"),
+            "dimension_counts": findings.get("dimension_counts"),
+            "high_risk_previews": (findings.get("high_risk_previews") or [])[:4],
+        },
+        "decision_payload_chars": len(payload),
+        "decision_payload_preview": payload[:8000],
+        "display_note": "最终报告使用完整四维结论；Trace输入控制在约15,000字符内。",
+    }
+
+@traceable(name="04_investment_decision", run_type="chain", process_inputs=_process_decision_inputs, process_outputs=_process_agent_analysis_output)
+def _trace_investment_decision(
+    user_payload: str,
+    findings_summary: dict,
+    pcs_summary: dict,
+) -> str:
+    return _invoke_brain(CLOSER_PROMPT, user_payload)
+
+
 def closer_node(state: ProjectState) -> ProjectState:
     logger.info("Closer started")
     asset_patches = state.get("asset_patches", [])
     economic_patches = state.get("economic_patches", [])
     legal_patches = state.get("legal_patches", [])
     financial_patches = state.get("financial_patches", [])
-    pcs_score, pcs_breakdown = calculate_pcs_breakdown(
-        asset_patches,
-        economic_patches,
-        legal_patches,
-        financial_patches,
-    )
+    findings_summary = _trace_consolidate_findings(asset_patches, economic_patches, legal_patches, financial_patches)
+    pcs_summary = _trace_calculate_pcs(asset_patches, economic_patches, legal_patches, financial_patches)
+    pcs_score = int(pcs_summary["final_score"])
+    pcs_breakdown = dict(pcs_summary["dimension_deductions"])
+    retrieval_reports = [
+        state.get("asset_retrieval_report", {}),
+        state.get("economic_retrieval_report", {}),
+        state.get("legal_retrieval_report", {}),
+        state.get("financial_retrieval_report", {}),
+    ]
+    coverage_report = _trace_coverage_report(state.get("master_inventory", {}), retrieval_reports)
 
     user_payload = f"""
 【PCS 分数】
@@ -601,6 +976,9 @@ def closer_node(state: ProjectState) -> ProjectState:
 
 【PCS 扣分明细】
 {json.dumps(pcs_breakdown, ensure_ascii=False)}
+
+【数据覆盖率】
+{json.dumps(coverage_report, ensure_ascii=False)}
 
 【资产 patches】
 {chr(10).join(f"- {item}" for item in asset_patches)}
@@ -614,7 +992,7 @@ def closer_node(state: ProjectState) -> ProjectState:
 【财务 patches】
 {chr(10).join(f"- {item}" for item in financial_patches)}
 """
-    final_report = _invoke_brain(CLOSER_PROMPT, user_payload)
+    final_report = _trace_investment_decision(user_payload, findings_summary, pcs_summary)
     logger.info(
         "Closer finished | pcs_score=%s | asset_patches=%s | economic_patches=%s | legal_patches=%s | financial_patches=%s | report_chars=%s",
         pcs_score,
@@ -624,21 +1002,22 @@ def closer_node(state: ProjectState) -> ProjectState:
         len(financial_patches),
         len(final_report),
     )
-    return {"pcs_score": pcs_score, "pcs_breakdown": pcs_breakdown, "final_report": final_report}
-
+    return {"pcs_score": pcs_score, "pcs_breakdown": pcs_breakdown, "coverage_report": coverage_report, "final_report": final_report}
 
 def build_graph():
     graph = StateGraph(ProjectState)
+    graph.add_node("master_planner_node", master_planner_node)
     graph.add_node("asset_agent_node", asset_agent_node)
     graph.add_node("economic_agent_node", economic_agent_node)
     graph.add_node("legal_agent_node", legal_agent_node)
     graph.add_node("financial_node", financial_node)
     graph.add_node("closer_node", closer_node)
 
-    graph.add_edge(START, "asset_agent_node")
-    graph.add_edge(START, "economic_agent_node")
-    graph.add_edge(START, "legal_agent_node")
-    graph.add_edge(START, "financial_node")
+    graph.add_edge(START, "master_planner_node")
+    graph.add_edge("master_planner_node", "asset_agent_node")
+    graph.add_edge("master_planner_node", "economic_agent_node")
+    graph.add_edge("master_planner_node", "legal_agent_node")
+    graph.add_edge("master_planner_node", "financial_node")
     graph.add_edge(["asset_agent_node", "economic_agent_node", "legal_agent_node", "financial_node"], "closer_node")
     graph.add_edge("closer_node", END)
     return graph.compile()

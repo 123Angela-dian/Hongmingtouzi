@@ -2964,13 +2964,17 @@ def _stream_graph_run(initial_state: ProjectState) -> ProjectState:
 
     with st.spinner("LangGraph 正在并发调度资产、经济、法律、财务四个 Agent..."):
         graph_config = {
-            "run_name": "distressed_asset_xray_graph",
+            "run_name": "master_agent",
             "metadata": {
                 "app": "困境资产X光机",
                 "project": os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT"),
             },
         }
-        for event in compiled_graph.stream(run_state, stream_mode="updates", config=graph_config):
+        trace_run_state = dict(run_state)
+        trace_run_state["csv_evidence_rows"] = []
+        trace_run_state["metric_results"] = {}
+        graph_config["metadata"]["trace_payload"] = "bounded"
+        for event in compiled_graph.stream(trace_run_state, stream_mode="updates", config=graph_config):
             st.session_state.event_log.append(str(event))
             if "asset_agent_node" in event:
                 patches = event["asset_agent_node"].get("asset_patches", [])

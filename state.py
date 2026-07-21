@@ -16,6 +16,16 @@ class ProjectState(TypedDict, total=False):
     asset_and_mortgage_data: str
     csv_evidence_rows: List[dict]
     metric_results: dict
+    project_id: int
+    project_name: str
+    data_source: str
+    master_inventory: dict
+    master_plan: dict
+    asset_retrieval_report: dict
+    economic_retrieval_report: dict
+    legal_retrieval_report: dict
+    financial_retrieval_report: dict
+    coverage_report: dict
 
     # 中间诊断槽：并发节点只增量写入自己的 patches
     asset_patches: Annotated[List[str], append_list]
@@ -37,6 +47,16 @@ def empty_state() -> ProjectState:
         "asset_and_mortgage_data": "",
         "csv_evidence_rows": [],
         "metric_results": {},
+        "project_id": 0,
+        "project_name": "",
+        "data_source": "",
+        "master_inventory": {},
+        "master_plan": {},
+        "asset_retrieval_report": {},
+        "economic_retrieval_report": {},
+        "legal_retrieval_report": {},
+        "financial_retrieval_report": {},
+        "coverage_report": {},
         "asset_patches": [],
         "economic_patches": [],
         "legal_patches": [],

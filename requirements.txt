@@ -1,9 +1,14 @@
-streamlit>=1.36.0
-langgraph>=0.2.0
-langchain-core>=0.2.0
-langchain-openai>=0.1.20
-langsmith>=0.1.95
+streamlit>=1.36.0,<2
+langgraph>=0.2.0,<1
+langchain-core>=0.2.0,<1
+langchain-openai>=0.1.20,<1
+langsmith>=0.1.95,<1
 python-dotenv>=1.0.1
+pydantic>=2.7,<3
 requests>=2.31.0
 python-docx>=1.1.2
 openpyxl>=3.1.5
+unstructured[csv,docx,md,pptx,rtf,tsv,xlsx]==0.24.1
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
+pypdf>=6.6.2,<7
+pymysql>=1.1.0

@@ -47,7 +47,7 @@ LEGAL_PROMPT = """
 
 输出要求：
 - 只输出 3 到 7 条 Markdown bullet。
-- 每条必须包含：风险标签、事实依据、投资影响、建议动作。
+- 每条严格使用：`- **结论**：...；**依据**：...；**影响**：...；**建议**：...`。
 - 不得引用未提供材料之外的事实。
 """
 
@@ -62,7 +62,8 @@ FINANCIAL_PROMPT = """
 
 输出要求：
 - 只输出 3 到 7 条 Markdown bullet。
-- 每条必须包含：测算标签、关键假设、金额或比例影响、建议动作。
+- 每条严格使用：`- **结论**：...；**依据**：...；**影响**：...；**建议**：...`。
+- “依据”必须写明关键假设，“影响”必须包含可得出的金额或比例影响。
 - 对不确定估值必须主动折扣，不得乐观外推。
 """
 
@@ -75,7 +76,7 @@ ASSET_PROMPT = """
 
 输出要求：
 - 只输出 3 到 7 条 Markdown bullet。
-- 每条必须包含：资产专题、事实依据、处置影响、建议动作。
+- 每条严格使用：`- **结论**：...；**依据**：...；**影响**：...；**建议**：...`。
 - 不得引用未提供材料之外的事实。
 """
 
@@ -88,7 +89,8 @@ ECONOMIC_PROMPT = """
 
 输出要求：
 - 只输出 3 到 7 条 Markdown bullet。
-- 每条必须包含：经济专题、关键假设、金额或比例影响、建议动作。
+- 每条严格使用：`- **结论**：...；**依据**：...；**影响**：...；**建议**：...`。
+- “依据”必须写明关键假设，“影响”必须包含可得出的金额或比例影响。
 - 对价格、去化和回款必须用审慎口径，不得乐观外推。
 """
 
@@ -640,7 +642,8 @@ def _process_dynamic_retrieval_output(output: object) -> dict:
 def _trace_dynamic_context_selection(project_id: int, agent_name: str, master_plan: dict) -> dict:
     from graph_rag import retrieve_agent_context
 
-    return retrieve_agent_context(project_id, agent_name)
+    agent_plan = dict((master_plan.get("agents") or {}).get(agent_name) or {})
+    return retrieve_agent_context(project_id, agent_name, retrieval_plan=agent_plan)
 
 
 def _run_agent(

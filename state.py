@@ -19,6 +19,7 @@ class ProjectState(TypedDict, total=False):
     project_id: int
     project_name: str
     data_source: str
+    parsed_artifact_key: str
     master_inventory: dict
     master_plan: dict
     asset_retrieval_report: dict
@@ -50,6 +51,7 @@ def empty_state() -> ProjectState:
         "project_id": 0,
         "project_name": "",
         "data_source": "",
+        "parsed_artifact_key": "",
         "master_inventory": {},
         "master_plan": {},
         "asset_retrieval_report": {},

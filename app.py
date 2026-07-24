@@ -7,20 +7,20 @@ import base64
 import hashlib
 import re
 import time
+import uuid
 from contextlib import nullcontext
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Dict, Iterable
 
-from docx import Document
-from openpyxl import load_workbook
 import streamlit as st
 from dotenv import load_dotenv
 
-from ocr import PaddleOCRError, run_paddleocr
+from document_parser import DataPackageParser
 from logger_config import LOG_FILE, get_logger
 from state import ProjectState, empty_state
+from storage import get_storage
 
 
 load_dotenv(override=True)
@@ -93,16 +93,24 @@ SUPPORTED_INPUT_EXTENSIONS = {
     ".png",
     ".jpg",
     ".jpeg",
+    ".tif",
+    ".tiff",
+    ".bmp",
+    ".webp",
     ".txt",
     ".md",
+    ".html",
+    ".htm",
     ".docx",
+    ".pptx",
     ".xlsx",
     ".csv",
+    ".tsv",
+    ".rtf",
+    ".eml",
+    ".msg",
 }
 
-OCR_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
-TEXT_EXTENSIONS = {".txt", ".md"}
-OFFICE_EXTENSIONS = {".docx", ".xlsx"}
 CSV_EXTENSIONS = {".csv"}
 
 CSV_CATEGORY_CONFIG = {
@@ -158,6 +166,12 @@ def _init_session() -> None:
         st.session_state.active_report_chapter = ""
     if "report_chapter_cache" not in st.session_state:
         st.session_state.report_chapter_cache = {}
+    if "cloud_game_result" not in st.session_state:
+        st.session_state.cloud_game_result = {}
+    if "cloud_game_report" not in st.session_state:
+        st.session_state.cloud_game_report = ""
+    if "cloud_game_error" not in st.session_state:
+        st.session_state.cloud_game_error = ""
 
 
 def _is_configured(value: str | None) -> bool:
@@ -2165,6 +2179,7 @@ def _dimension_specs() -> list[dict[str, str]]:
             "title": "资产",
             "data_key": "asset_and_mortgage_data",
             "agent": "资产 Agent",
+            "source": "资产明细与抵押物清册",
             "fallback": "资产清单、权属、抵押物、查封受限、可处置价值。",
             "one": "资产：有什么、权属是否清楚、能不能处置。",
             "judgement": "优先判断资产范围、权属证照、抵押查封和可处置价值是否支撑交易。",
@@ -2174,6 +2189,7 @@ def _dimension_specs() -> list[dict[str, str]]:
             "title": "经济",
             "data_key": "financial_and_cost_data",
             "agent": "经济 Agent",
+            "source": "货值与开发成本数据",
             "fallback": "市场、货值、价格假设、去化、回款、敏感性。",
             "one": "经济：值多少钱、卖不卖得动、价格假设是否可靠。",
             "judgement": "重点复核货值、价格假设、市场对标、去化和回款节奏是否过于乐观。",
@@ -2183,6 +2199,7 @@ def _dimension_specs() -> list[dict[str, str]]:
             "title": "法律",
             "data_key": "creditor_and_seizure_data",
             "agent": "法律 Agent",
+            "source": "股权沿革、债权与查封数据",
             "fallback": "主体股权、交易结构、合同、债权债务法律关系、查封执行。",
             "one": "法律：主体、合同、债权和执行路径是否有效。",
             "judgement": "优先确认交易结构、合同安排、债权顺位、查封执行和权利冲突。",
@@ -2192,6 +2209,7 @@ def _dimension_specs() -> list[dict[str, str]]:
             "title": "财务",
             "data_key": "financial_and_cost_data",
             "agent": "财务 Agent",
+            "source": "货值成本与资产抵押数据",
             "fallback": "债务结构、成本费用、税费、资金缺口、清偿率、收益测算。",
             "one": "财务：债务多少、还要投多少、清偿和收益是否成立。",
             "judgement": "重点判断债务结构、成本费用、税费测算、资金缺口和清偿率。",
@@ -2499,11 +2517,12 @@ def _inject_sample_data() -> None:
 
 
 def _save_uploaded_file(uploaded_file) -> Path:
-    upload_dir = Path(".tmp_uploads")
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    storage = get_storage()
     safe_name = Path(uploaded_file.name).name
-    file_path = upload_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name}"
-    file_path.write_bytes(uploaded_file.getbuffer())
+    storage_key = f"uploads/{datetime.now().strftime('%Y%m%d')}/{uuid.uuid4().hex}_{safe_name}"
+    uploaded_file.seek(0)
+    storage.put_file(storage_key, uploaded_file)
+    file_path = storage.local_path(storage_key)
     logger.info("Uploaded file saved | file=%s | bytes=%s", file_path.name, file_path.stat().st_size)
     return file_path
 
@@ -2525,7 +2544,7 @@ def _collect_folder_files(folder_path: str) -> list[Path]:
         if path.is_file() and path.suffix.lower() in SUPPORTED_INPUT_EXTENSIONS
     ]
     if not files:
-        raise FileNotFoundError("该文件夹内没有可解析文件。支持 pdf/png/jpg/jpeg/txt/md/docx/xlsx。")
+        raise FileNotFoundError("该文件夹内没有可解析的图片、PDF、Office 或文本文件。")
     deduped: dict[tuple[str, int], Path] = {}
     skipped = 0
     for path in sorted(files):
@@ -2561,9 +2580,6 @@ def _save_final_report(run_dir: Path, state: ProjectState) -> None:
     logger.info("Final report saved | dir=%s", run_dir)
 
 
-CACHE_DIR = Path("output") / "cache"
-
-
 def _file_signature(file_path: Path) -> dict:
     stat = file_path.stat()
     return {
@@ -2576,7 +2592,7 @@ def _file_signature(file_path: Path) -> dict:
 
 def _package_cache_key(file_paths: list[Path], fast_mode: bool, max_ocr_files: int) -> str:
     payload = {
-        "version": 2,
+        "version": 3,
         "fast_mode": fast_mode,
         "max_ocr_files": max_ocr_files,
         "files": sorted((_file_signature(path) for path in file_paths), key=lambda item: item["path"]),
@@ -2584,108 +2600,30 @@ def _package_cache_key(file_paths: list[Path], fast_mode: bool, max_ocr_files: i
     return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _package_cache_path(cache_key: str) -> Path:
-    return CACHE_DIR / "packages" / f"{cache_key}.json"
+def _package_cache_storage_key(cache_key: str) -> str:
+    return f"cache/packages/{cache_key}.json"
 
 
 def _load_package_cache(cache_key: str) -> tuple[ProjectState, str, list[str]] | None:
-    cache_path = _package_cache_path(cache_key)
-    if not cache_path.exists():
+    payload = get_storage().get_json(_package_cache_storage_key(cache_key))
+    if not payload:
         return None
-    payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    logger.info("Package parse cache hit | key=%s | path=%s", cache_key, cache_path)
+    logger.info("Package parse cache hit | key=%s", cache_key)
     logs = list(payload.get("logs") or [])
     logs.append("命中项目资料包缓存：已跳过 OCR 和结构化分流。")
-    return payload.get("state") or empty_state(), str(payload.get("ocr_markdown") or ""), logs
+    return payload.get("state") or empty_state(), "", logs
 
 
 def _save_package_cache(cache_key: str, state: ProjectState, ocr_markdown: str, logs: list[str]) -> None:
-    cache_path = _package_cache_path(cache_key)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
-        json.dumps(
-            {
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "state": state,
-                "ocr_markdown": ocr_markdown,
-                "logs": logs,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    get_storage().put_json(
+        _package_cache_storage_key(cache_key),
+        {
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "state": state,
+            "logs": logs,
+        },
     )
-    logger.info("Package parse cache saved | key=%s | path=%s", cache_key, cache_path)
-
-
-def _file_cache_key(file_path: Path) -> str:
-    signature = _file_signature(file_path)
-    signature["version"] = 2
-    return hashlib.sha1(json.dumps(signature, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def _file_cache_path(file_path: Path) -> Path:
-    return CACHE_DIR / "files" / f"{_file_cache_key(file_path)}.json"
-
-
-def _load_file_text_cache(file_path: Path) -> tuple[str, str] | None:
-    cache_path = _file_cache_path(file_path)
-    if not cache_path.exists():
-        return None
-    payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    logger.info("File text cache hit | file=%s", file_path.name)
-    return str(payload.get("text") or ""), str(payload.get("source") or "cache")
-
-
-def _save_file_text_cache(file_path: Path, text: str, source: str) -> None:
-    if not text.strip():
-        return
-    cache_path = _file_cache_path(file_path)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
-        json.dumps(
-            {
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "file": _file_signature(file_path),
-                "source": source,
-                "text": text,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-
-def _read_docx_text(file_path: Path) -> str:
-    document = Document(str(file_path))
-    parts: list[str] = []
-    for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-        if text:
-            parts.append(text)
-    for table in document.tables:
-        for row in table.rows:
-            cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
-            line = " | ".join(cell for cell in cells if cell)
-            if line:
-                parts.append(line)
-    return "\n".join(parts).strip()
-
-
-def _read_xlsx_text(file_path: Path, max_rows_per_sheet: int = 300) -> str:
-    workbook = load_workbook(file_path, read_only=True, data_only=True)
-    chunks: list[str] = []
-    for sheet in workbook.worksheets:
-        chunks.append(f"### Sheet: {sheet.title}")
-        for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-            if row_index > max_rows_per_sheet:
-                chunks.append(f"... 已截断，超过 {max_rows_per_sheet} 行")
-                break
-            values = [str(value).strip() for value in row if value is not None and str(value).strip()]
-            if values:
-                chunks.append(" | ".join(values))
-    workbook.close()
-    return "\n".join(chunks).strip()
+    logger.info("Package parse cache saved | key=%s", cache_key)
 
 
 def _read_csv_rows(file_path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -2820,6 +2758,14 @@ def _parse_csv_files_to_state(file_paths: list[Path]) -> tuple[ProjectState, str
     merged_markdown = "\n\n---\n\n".join(markdown_chunks).strip()
     if not merged_markdown:
         raise ValueError("未识别到可解析的四类 CSV 文件。")
+    package_parser = DataPackageParser(get_storage())
+    parse_result = package_parser.parse(list(selected.values()))
+    logs.extend(parse_result.logs)
+    logs.extend(parse_result.errors)
+    if parse_result.documents:
+        artifact_key = package_parser.save_elements_artifact(cache_key, parse_result.documents)
+        state["parsed_artifact_key"] = artifact_key
+        state["data_source"] = "parsed_documents"
     logger.info("CSV package parsing finished | csv_categories=%s", ",".join(selected.keys()))
     _save_package_cache(cache_key, state, merged_markdown, logs)
     return state, merged_markdown, logs
@@ -2830,126 +2776,36 @@ def _can_parse_without_brain(file_paths: list[Path]) -> bool:
     return bool(csv_files) and len(csv_files) == len(file_paths)
 
 
-def _rank_files_for_fast_mode(file_paths: list[Path]) -> list[Path]:
-    keywords = [
-        "交易",
-        "重组",
-        "债权",
-        "查封",
-        "抵押",
-        "评估",
-        "测算",
-        "财务",
-        "融资",
-        "项目",
-        "股权",
-        "成本",
-        "资产",
-        "清册",
-    ]
-
-    def score(path: Path) -> tuple[int, str]:
-        name = path.name
-        keyword_score = sum(1 for keyword in keywords if keyword in name)
-        type_score = 2 if path.suffix.lower() in OFFICE_EXTENSIONS | TEXT_EXTENSIONS else 0
-        return (keyword_score + type_score, name)
-
-    return sorted(file_paths, key=score, reverse=True)
-
-
-def _parse_files_to_state(
-    file_paths: list[Path],
-    *,
-    fast_mode: bool = True,
-    max_ocr_files: int = 20,
-) -> tuple[ProjectState, str, list[str]]:
-    cache_key = _package_cache_key(file_paths, fast_mode, max_ocr_files)
+def _parse_files_to_state(file_paths: list[Path]) -> tuple[ProjectState, str, list[str]]:
+    cache_key = _package_cache_key(file_paths, fast_mode=False, max_ocr_files=0)
     cached = _load_package_cache(cache_key)
     if cached:
         return cached
 
-    markdown_chunks: list[str] = []
-    logs: list[str] = []
-    ocr_count = 0
-    ordered_files = _rank_files_for_fast_mode(file_paths) if fast_mode else file_paths
-    logger.info(
-        "Asset package parsing started | files=%s | fast_mode=%s | max_ocr_files=%s",
-        len(file_paths),
-        fast_mode,
-        max_ocr_files,
-    )
-
-    for index, file_path in enumerate(ordered_files, start=1):
-        suffix = file_path.suffix.lower()
-        title = f"## 文件 {index}: {file_path.name}"
-        logger.info("Parsing file | index=%s | file=%s | suffix=%s", index, file_path.name, suffix)
-        try:
-            cached_text = _load_file_text_cache(file_path)
-            if cached_text:
-                text, source = cached_text
-                if text:
-                    markdown_chunks.append(f"{title}\n\n{text}")
-                    logs.append(f"命中文件缓存：{file_path.name} ({source})")
-                continue
-
-            if suffix in TEXT_EXTENSIONS:
-                text = file_path.read_text(encoding="utf-8", errors="ignore").strip()
-                if text:
-                    _save_file_text_cache(file_path, text, "text")
-                    markdown_chunks.append(f"{title}\n\n{text}")
-                    logs.append(f"直接读取文本：{file_path.name}")
-                continue
-
-            if suffix == ".docx":
-                text = _read_docx_text(file_path)
-                if text:
-                    _save_file_text_cache(file_path, text, "docx")
-                    markdown_chunks.append(f"{title}\n\n{text}")
-                    logs.append(f"DOCX 直接抽文本：{file_path.name}")
-                continue
-
-            if suffix == ".xlsx":
-                text = _read_xlsx_text(file_path)
-                if text:
-                    _save_file_text_cache(file_path, text, "xlsx")
-                    markdown_chunks.append(f"{title}\n\n{text}")
-                    logs.append(f"XLSX 直接抽表格：{file_path.name}")
-                continue
-
-            if suffix in OCR_EXTENSIONS:
-                if fast_mode and ocr_count >= max_ocr_files:
-                    logs.append(f"快速模式跳过 OCR：{file_path.name}")
-                    logger.info("Fast mode skipped OCR file | file=%s", file_path.name)
-                    continue
-                ocr_count += 1
-                ocr_result = run_paddleocr(file_path)
-                _save_file_text_cache(file_path, ocr_result.markdown, f"ocr:{ocr_result.job_id}")
-                markdown_chunks.append(f"{title}\n\n{ocr_result.markdown}")
-                logs.append(f"PaddleOCR 完成：{file_path.name}, job_id={ocr_result.job_id}, pages={ocr_result.pages}")
-                continue
-
-            logs.append(f"跳过不支持类型：{file_path.name}")
-        except Exception as exc:
-            logs.append(f"文件解析失败，已跳过：{file_path.name} ({exc})")
-            logger.exception("File parsing failed and skipped | file=%s", file_path)
-            continue
-
+    logger.info("Asset package parsing started | files=%s", len(file_paths))
+    package_parser = DataPackageParser(get_storage())
+    parse_result = package_parser.parse(file_paths)
+    logs = [*parse_result.logs, *parse_result.errors]
+    markdown_chunks = [
+        f"## 文件 {index}: {document.source_file}\n\n{document.markdown}"
+        for index, document in enumerate(parse_result.documents, start=1)
+        if document.markdown.strip()
+    ]
     merged_markdown = "\n\n---\n\n".join(markdown_chunks).strip()
     if not merged_markdown:
-        raise ValueError("未获得可用于结构化分流的文本。")
+        error_summary = "；".join(parse_result.errors[:3])
+        raise ValueError(f"未获得可用于结构化分流的文本。{error_summary}")
 
     structured_state = structure_markdown_to_state(merged_markdown)
+    artifact_key = package_parser.save_elements_artifact(cache_key, parse_result.documents)
+    structured_state["parsed_artifact_key"] = artifact_key
+    structured_state["data_source"] = "parsed_documents"
     logger.info("Asset package parsing finished | files=%s | merged_chars=%s", len(file_paths), len(merged_markdown))
     _save_package_cache(cache_key, structured_state, merged_markdown, logs)
     return structured_state, merged_markdown, logs
 
 
 def _stream_graph_run(initial_state: ProjectState) -> ProjectState:
-    asset_box = st.empty()
-    economic_box = st.empty()
-    legal_box = st.empty()
-    financial_box = st.empty()
-    closer_box = st.empty()
     run_state: ProjectState = {
         **initial_state,
         "asset_patches": [],
@@ -2962,7 +2818,7 @@ def _stream_graph_run(initial_state: ProjectState) -> ProjectState:
     }
     final_state: ProjectState = dict(run_state)
 
-    with st.spinner("LangGraph 正在并发调度资产、经济、法律、财务四个 Agent..."):
+    with st.status("正在运行四维分析...", expanded=True) as status:
         graph_config = {
             "run_name": "master_agent",
             "metadata": {
@@ -2979,252 +2835,346 @@ def _stream_graph_run(initial_state: ProjectState) -> ProjectState:
             if "asset_agent_node" in event:
                 patches = event["asset_agent_node"].get("asset_patches", [])
                 final_state["asset_patches"] = final_state.get("asset_patches", []) + patches
-                asset_box.markdown(
-                    "#### 资产 Agent Patches\n"
-                    + "\n".join(f"- {item}" for item in patches),
-                )
+                status.write(f"资产分析完成，共 {len(patches)} 条结论")
             if "economic_agent_node" in event:
                 patches = event["economic_agent_node"].get("economic_patches", [])
                 final_state["economic_patches"] = final_state.get("economic_patches", []) + patches
-                economic_box.markdown(
-                    "#### 经济 Agent Patches\n"
-                    + "\n".join(f"- {item}" for item in patches),
-                )
+                status.write(f"经济分析完成，共 {len(patches)} 条结论")
             if "legal_agent_node" in event:
                 patches = event["legal_agent_node"].get("legal_patches", [])
                 final_state["legal_patches"] = final_state.get("legal_patches", []) + patches
-                legal_box.markdown(
-                    "#### 法律 Agent Patches\n"
-                    + "\n".join(f"- {item}" for item in patches),
-                )
+                status.write(f"法律分析完成，共 {len(patches)} 条结论")
             if "financial_node" in event:
                 patches = event["financial_node"].get("financial_patches", [])
                 final_state["financial_patches"] = final_state.get("financial_patches", []) + patches
-                financial_box.markdown(
-                    "#### 财务 Agent Patches\n"
-                    + "\n".join(f"- {item}" for item in patches),
-                )
+                status.write(f"财务分析完成，共 {len(patches)} 条结论")
             if "closer_node" in event:
                 final_state.update(event["closer_node"])
-                closer_box.info("总控节点已完成 PCS 扣分矩阵与因果推断。")
-            time.sleep(0.15)
+                status.write("买方与卖方分析完成")
+        status.update(label="分析完成", state="complete", expanded=False)
 
     return final_state
 
 
+def _default_cloud_project_id() -> int:
+    raw_value = os.getenv("DATABASE_GAME_DEFAULT_PROJECT_ID", "1").strip()
+    try:
+        project_id = int(raw_value)
+    except ValueError:
+        return 1
+    return max(project_id, 1)
+
+
+def _run_cloud_database_game(project_id: int) -> tuple[dict, str]:
+    from database_game.service import load_mandate, run_database_game
+
+    mandate_path = Path("config/database_game_mandate.example.json")
+    mandate = load_mandate(mandate_path)
+    result = run_database_game(
+        env_path=Path(".env"),
+        project_id=project_id,
+        mandate=mandate,
+    )
+    report_path = Path(str(result["full_report_path"]))
+    report = report_path.read_text(encoding="utf-8")
+    return result, report
+
+
+def _render_cloud_game_result() -> None:
+    error = str(st.session_state.get("cloud_game_error") or "")
+    result = st.session_state.get("cloud_game_result") or {}
+    report = str(st.session_state.get("cloud_game_report") or "")
+    if error:
+        st.error(f"云数据库分析失败：{error}")
+        return
+    if not result or not report:
+        return
+
+    run_id = result.get("run_id")
+    project_id = result.get("project_id")
+    with st.expander("云数据库完整分析报告", expanded=True):
+        meta_col, download_col = st.columns([3, 1])
+        with meta_col:
+            st.caption(f"项目 ID：{project_id} · 运行 ID：{run_id} · 状态：已完成")
+        with download_col:
+            st.download_button(
+                "下载报告",
+                data=report,
+                file_name=f"database_game_{project_id}_run_{run_id}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+        st.markdown(report)
+
+
+def _render_minimal_demo_css() -> None:
+    st.markdown(
+        """
+        <style>
+        header[data-testid="stHeader"], #MainMenu, footer { display: none; }
+        .stApp { background: #f4f6f7; color: #17202a; }
+        .block-container { max-width: 1180px; padding: 2rem 2rem 4rem; }
+        .demo-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.5rem;
+            border-bottom: 1px solid #d9dee3;
+            padding-bottom: 1.15rem;
+            margin-bottom: 1.2rem;
+        }
+        .demo-brand { display: flex; align-items: center; gap: 0.9rem; min-width: 0; }
+        .demo-brand img { width: 42px; height: 42px; object-fit: contain; }
+        .demo-title { color: #17202a; font-size: 1.35rem; font-weight: 700; line-height: 1.25; }
+        .demo-subtitle { color: #66717c; font-size: 0.82rem; margin-top: 0.2rem; }
+        .demo-state {
+            color: #315c4c;
+            background: #e7f0ec;
+            border: 1px solid #cbded6;
+            border-radius: 6px;
+            padding: 0.35rem 0.65rem;
+            font-size: 0.78rem;
+            white-space: nowrap;
+        }
+        h1, h2, h3, h4 { color: #17202a; letter-spacing: 0; }
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background: #ffffff;
+            border-color: #dfe3e6;
+            border-radius: 6px;
+        }
+        div[data-baseweb="tab-list"] { gap: 0.25rem; border-bottom: 1px solid #dfe3e6; }
+        button[data-baseweb="tab"] { min-height: 42px; }
+        .stButton > button, .stLinkButton > a { border-radius: 6px; min-height: 40px; }
+        .result-section { margin-top: 1.7rem; }
+        .result-heading { color: #17202a; font-size: 1.05rem; font-weight: 700; margin-bottom: 0.75rem; }
+        .dimension-meta { color: #66717c; font-size: 0.8rem; margin-bottom: 0.8rem; }
+        @media (max-width: 700px) {
+            .block-container { padding: 1.2rem 1rem 3rem; }
+            .demo-header { align-items: flex-start; }
+            .demo-state { white-space: normal; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_minimal_header(has_data: bool, run_done: bool) -> None:
+    logo_src = _asset_data_uri("assets/hongming-logo-transparent.png")
+    logo_html = f'<img src="{logo_src}" alt="弘明投资">' if logo_src else ""
+    if run_done:
+        state_text = "分析已完成"
+    elif has_data:
+        state_text = "材料已就绪"
+    else:
+        state_text = "等待材料"
+    st.markdown(
+        f"""
+        <div class="demo-header">
+            <div class="demo-brand">
+                {logo_html}
+                <div>
+                    <div class="demo-title">困境资产分析 Demo</div>
+                    <div class="demo-subtitle">弘明投资 · 最小演示版本</div>
+                </div>
+            </div>
+            <div class="demo-state">{state_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_material_loader(brain_status: str) -> None:
+    uploaded_files = st.file_uploader(
+        "上传项目材料",
+        type=[
+            "csv", "tsv", "pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp",
+            "txt", "md", "html", "htm", "docx", "pptx", "xlsx",
+            "rtf", "eml", "msg",
+        ],
+        accept_multiple_files=True,
+    )
+    folder_path = st.text_input("本机材料文件夹", placeholder="/Users/.../项目资料")
+    has_input = bool(folder_path.strip()) or bool(uploaded_files)
+
+    if st.button("解析材料", type="primary", disabled=not has_input):
+        with st.spinner("正在解析项目材料..."):
+            try:
+                if folder_path.strip():
+                    file_paths = _collect_folder_files(folder_path.strip())
+                else:
+                    file_paths = _save_uploaded_files(uploaded_files)
+                if _can_parse_without_brain(file_paths):
+                    structured_state, merged_markdown, parse_logs = _parse_csv_files_to_state(file_paths)
+                else:
+                    if brain_status != "在线":
+                        raise ValueError("非纯 CSV 材料需要配置 BRAIN_API_KEY 或 OPENAI_API_KEY。")
+                    structured_state, merged_markdown, parse_logs = _parse_files_to_state(file_paths)
+                st.session_state.project_state = structured_state
+                st.session_state.metric_result_cache = {}
+                st.session_state.report_chapter_cache = {}
+                st.session_state.ocr_markdown = merged_markdown
+                st.session_state.run_done = False
+                st.session_state.event_log = parse_logs
+                st.session_state.material_count = len(file_paths)
+                st.session_state.project_updated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+                st.session_state.run_dir = ""
+            except Exception as exc:
+                logger.exception("Asset package parsing failed")
+                st.error(f"解析失败：{exc}")
+            else:
+                logger.info("Asset package parsing succeeded | files=%s", len(file_paths))
+                st.rerun()
+
+
+def _markdown_heading(line: str) -> str:
+    stripped = line.strip().strip("*_").strip()
+    match = re.match(r"^#{1,6}\s*(?:\d+[.、]\s*)?(.+?)\s*$", stripped)
+    if match:
+        return match.group(1).strip()
+    match = re.match(r"^\d+[.、]\s*(.+?)\s*$", stripped)
+    return match.group(1).strip() if match else ""
+
+
+def _extract_report_section(report: str, keyword: str) -> str:
+    lines = str(report or "").splitlines()
+    start: int | None = None
+    collected: list[str] = []
+    report_headings = ("总体结论", "买方", "卖方", "双方核心分歧", "交易推进建议")
+    for index, line in enumerate(lines):
+        heading = _markdown_heading(line)
+        if start is None:
+            if heading and keyword in heading:
+                start = index + 1
+            continue
+        if heading and any(item in heading for item in report_headings):
+            break
+        collected.append(line)
+    return "\n".join(collected).strip()
+
+
+def _render_dimension_results(state: ProjectState, run_done: bool) -> None:
+    st.markdown('<div class="result-section"><div class="result-heading">四维分析结果</div></div>', unsafe_allow_html=True)
+    specs = _dimension_specs()
+    tabs = st.tabs([spec["title"] for spec in specs])
+    for tab, spec in zip(tabs, specs):
+        with tab:
+            st.markdown(
+                f'<div class="dimension-meta">{escape(spec["agent"])} · 输入：{escape(spec["source"])}</div>',
+                unsafe_allow_html=True,
+            )
+            patches = state.get(f'{spec["id"]}_patches', []) or []
+            if not run_done:
+                st.info("等待开始分析")
+                continue
+            if not patches:
+                st.warning("该维度未生成明确结论")
+                continue
+            with st.container(border=True):
+                for index, item in enumerate(patches, start=1):
+                    finding = re.sub(r"^\s*(?:[-*•]|\d+[.)、])\s*", "", str(item)).strip()
+                    st.markdown(f"**{index}.** {finding}")
+
+
+def _render_buyer_seller_results(state: ProjectState, run_done: bool) -> None:
+    st.markdown('<div class="result-section"><div class="result-heading">交易双方分析</div></div>', unsafe_allow_html=True)
+    buyer_col, seller_col = st.columns(2, gap="medium")
+    report = str(state.get("final_report") or "")
+    buyer = _extract_report_section(report, "买方")
+    seller = _extract_report_section(report, "卖方")
+
+    with buyer_col:
+        with st.container(border=True):
+            st.markdown("### 买方视角")
+            if run_done and buyer:
+                st.markdown(buyer)
+            elif run_done:
+                st.warning("买方分析未生成")
+            else:
+                st.info("等待四维分析完成")
+    with seller_col:
+        with st.container(border=True):
+            st.markdown("### 卖方视角")
+            if run_done and seller:
+                st.markdown(seller)
+            elif run_done:
+                st.warning("卖方分析未生成")
+            else:
+                st.info("等待四维分析完成")
+
+
 def main() -> None:
     st.set_page_config(
-        page_title="困境资产X光机",
+        page_title="困境资产分析 Demo",
         page_icon="X",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     _init_session()
-    _render_css()
-    _render_workbench_css()
-
-    eyes_status, brain_status, smith_status = _api_status()
-    _render_top_header("困境资产 X 光机 | 项目尽调报告自动化生成与阅读系统")
-
-    with st.sidebar:
-        st.title("困境资产X光机")
-        st.caption("Distressed Asset Risk Review Agent")
-        st.divider()
-        st.markdown("##### 运行配置")
-        st.metric("Eyes 视觉模型", eyes_status)
-        st.caption(os.getenv("EYES_MODEL", "qwen-vl-max"))
-        st.metric("Brain 推理模型", brain_status)
-        st.caption(os.getenv("BRAIN_MODEL", "deepseek-reasoner"))
-        st.caption("DeepSeek Key 已读取" if _is_configured(os.getenv("BRAIN_API_KEY")) else "DeepSeek Key 未读取")
-        st.metric("LangSmith Trace", smith_status)
-        st.caption(os.getenv("LANGCHAIN_PROJECT", "困境资产X光机_Demo"))
-        st.caption(f"本地日志：{LOG_FILE}")
-        st.divider()
-        uploaded_files = st.file_uploader(
-            "上传资产包文件（可多选）",
-            type=["csv", "pdf", "png", "jpg", "jpeg", "txt", "md", "docx", "xlsx"],
-            accept_multiple_files=True,
-            help="浏览器控件可多选文件；若资料很多，推荐使用下方文件夹路径，系统会递归读取整个文件夹。",
-        )
-        folder_path = st.text_input(
-            "直接读取本机资产包文件夹",
-            placeholder=r"C:\Users\杨嘉禾\Desktop\某项目资料包",
-            help="把所有杂乱资料放进一个文件夹后，将文件夹路径粘贴到这里。系统会递归读取子文件夹内所有支持文件。",
-        )
-        if uploaded_files:
-            st.caption(f"已接收 {len(uploaded_files)} 个上传文件")
-        if folder_path.strip():
-            st.caption("已选择文件夹路径：将优先递归解析该文件夹。")
-        fast_mode = st.checkbox("快速模式", value=True, help="docx/xlsx 直接抽文本，仅对少量图片/PDF 执行 OCR。")
-        max_ocr_files = st.number_input(
-            "最多 OCR 文件数",
-            min_value=1,
-            max_value=200,
-            value=20,
-            step=1,
-            disabled=not fast_mode,
-        )
-        save_outputs = st.checkbox("保存本次结构化结果", value=False)
-        has_input = bool(folder_path.strip()) or bool(uploaded_files)
-        uploaded_all_csv = bool(uploaded_files) and all(Path(file.name).suffix.lower() == ".csv" for file in uploaded_files)
-        parse_needs_brain = bool(uploaded_files) and not uploaded_all_csv
-        parse_disabled = not has_input or (parse_needs_brain and brain_status != "在线")
-        if parse_disabled and has_input and parse_needs_brain:
-            st.warning("非纯 CSV 资料包需要先在 .env 中填写 BRAIN_API_KEY。")
-        if st.button("解析项目数据并进入流程", type="primary", use_container_width=True, disabled=parse_disabled):
-            with st.spinner("正在解析项目数据..."):
-                try:
-                    if folder_path.strip():
-                        file_paths = _collect_folder_files(folder_path.strip())
-                    else:
-                        file_paths = _save_uploaded_files(uploaded_files)
-                    if _can_parse_without_brain(file_paths):
-                        structured_state, merged_markdown, parse_logs = _parse_csv_files_to_state(file_paths)
-                    else:
-                        if brain_status != "在线":
-                            raise ValueError("非纯 CSV 资料包需要先在 .env 中填写 BRAIN_API_KEY。")
-                        structured_state, merged_markdown, parse_logs = _parse_files_to_state(
-                            file_paths,
-                            fast_mode=fast_mode,
-                            max_ocr_files=int(max_ocr_files),
-                        )
-                    st.session_state.project_state = structured_state
-                    st.session_state.metric_result_cache = {}
-                    st.session_state.report_chapter_cache = {}
-                    st.session_state.ocr_markdown = merged_markdown
-                    st.session_state.run_done = False
-                    st.session_state.event_log = parse_logs
-                    st.session_state.material_count = len(file_paths)
-                    st.session_state.project_updated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    if save_outputs:
-                        run_dir = _create_run_dir()
-                        _save_structured_artifacts(run_dir, merged_markdown, structured_state)
-                        st.session_state.run_dir = str(run_dir)
-                    else:
-                        st.session_state.run_dir = ""
-                except Exception as exc:
-                    logger.exception("Asset package parsing failed")
-                    st.error(f"解析失败：{exc}")
-                else:
-                    logger.info("Asset package parsing succeeded | files=%s", len(file_paths))
-                    st.success(f"项目数据解析完成，共处理 {len(file_paths)} 个文件，四类输入已锁定。")
-        if st.button("载入演示结构化数据", use_container_width=True):
-            with st.spinner("正在载入海南陵水项目样本..."):
-                time.sleep(0.6)
-                _inject_sample_data()
-            st.success("演示数据已载入")
-
-        st.divider()
-        st.markdown("[打开 LangSmith](https://smith.langchain.com/)")
-
+    _render_minimal_demo_css()
+    _, brain_status, _ = _api_status()
     state: ProjectState = st.session_state.project_state
     has_data = all(state.get(key) for key in SAMPLE_DATA)
     run_done = bool(st.session_state.run_done)
-    pcs_score = int(state.get("pcs_score", 0)) if run_done else None
-    material_count = int(st.session_state.get("material_count", 0)) if has_data else 0
+    _render_minimal_header(has_data, run_done)
 
-    _render_overview_bar(has_data, run_done, pcs_score, material_count)
-
-    if st.session_state.active_report_view:
-        _render_overall_report_detail(state, has_data, run_done)
-        return
-
-    if st.session_state.active_dimension:
-        _render_dimension_detail(state)
-        return
-
-    left_col, right_col = st.columns([3, 1], gap="large")
-    with left_col:
-        st.markdown("<div class='workbench-section-title'>维度总览</div>", unsafe_allow_html=True)
-        if not has_data:
-            with st.container(border=True):
-                st.markdown("#### 等待项目材料接入")
-                st.caption("请在左侧上传资料包、输入本地文件夹路径，或载入演示结构化数据。")
-        _render_dimension_cards(state, has_data, run_done)
-
-        _render_overall_report_panel(state, has_data, run_done)
-
-        st.divider()
-        st.markdown("#### 四 Agent 审阅")
-        scan_disabled = not has_data or brain_status != "在线"
-        if scan_disabled and has_data:
-            st.warning("请先配置 BRAIN_API_KEY 或 OPENAI_API_KEY，再启动扫描。")
-        if st.button("启动 X 光机扫描", type="primary", disabled=scan_disabled):
-            logger.info("LangGraph scan triggered")
-            final_state = _stream_graph_run(state)
-            st.session_state.project_state = final_state
-            st.session_state.run_done = True
-            st.session_state.project_updated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
-            _pre_generate_report_chapters(final_state)
-            if st.session_state.run_dir:
-                _save_final_report(Path(st.session_state.run_dir), final_state)
-            logger.info("LangGraph scan finished | pcs_score=%s", final_state.get("pcs_score"))
+    demo_col, scan_col, cloud_col, _ = st.columns([1, 1, 1.25, 1.75])
+    with demo_col:
+        if st.button("载入演示数据", use_container_width=True):
+            _inject_sample_data()
             st.rerun()
-
-        if st.session_state.run_done:
-            with st.expander("资产 Agent 专题板块", expanded=False):
-                _render_agent_topic_board(
-                    "资产 Agent",
-                    st.session_state.project_state.get("asset_patches", []),
-                    "等待资产 Agent 输出权属、抵押、查封、处置价值等专题。",
-                )
-            with st.expander("经济 Agent 专题板块", expanded=False):
-                _render_agent_topic_board(
-                    "经济 Agent",
-                    st.session_state.project_state.get("economic_patches", []),
-                    "等待经济 Agent 输出市场、货值、去化、回款等专题。",
-                )
-            with st.expander("法律 Agent 专题板块", expanded=False):
-                _render_agent_topic_board(
-                    "法律 Agent",
-                    st.session_state.project_state.get("legal_patches", []),
-                    "等待法律 Agent 输出控制权、债权顺位、查封路径等专题。",
-                )
-            with st.expander("财务 Agent 专题板块", expanded=False):
-                _render_agent_topic_board(
-                    "财务 Agent",
-                    st.session_state.project_state.get("financial_patches", []),
-                    "等待财务 Agent 输出货值、成本、去化、税费等专题。",
-                )
-        else:
-            st.caption("扫描完成后会展示资产、经济、法律、财务四个 Agent 识别出的专题板块。")
-
-        st.divider()
-        st.markdown("#### PCS 智能投决宣判")
-        if not st.session_state.run_done:
-            st.caption("等待扫描完成后生成 PCS 分数与投决报告。")
-        else:
-            final_state = st.session_state.project_state
-            pcs_score = int(final_state.get("pcs_score", 0))
-            st.metric("PCS 投决分数", pcs_score)
-            st.progress(min(max(pcs_score, 0), 100) / 100)
-            _render_pcs_breakdown(final_state.get("pcs_breakdown", {}))
-            if pcs_score < 50:
-                st.error("红线拦截：当前项目不满足直接投资条件，必须先完成控制权、债权优先级和复工成本修复。")
+    with scan_col:
+        scan_disabled = not has_data or brain_status != "在线"
+        if st.button("开始分析", type="primary", use_container_width=True, disabled=scan_disabled):
+            logger.info("LangGraph scan triggered")
+            try:
+                final_state = _stream_graph_run(state)
+            except Exception as exc:
+                logger.exception("LangGraph scan failed")
+                st.error(f"分析失败：{exc}")
             else:
-                st.success("条件通过：项目具备进入交易结构设计和投资委员会复核的基础。")
-            st.markdown(final_state.get("final_report", ""))
-            st.divider()
-            st.link_button("查看 LangSmith 运行轨迹", "https://smith.langchain.com/")
-            if st.session_state.run_dir:
-                st.caption(f"本次结果已保存：{st.session_state.run_dir}")
+                st.session_state.project_state = final_state
+                st.session_state.run_done = True
+                st.session_state.project_updated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+                if st.session_state.run_dir:
+                    _save_final_report(Path(st.session_state.run_dir), final_state)
+                logger.info("LangGraph scan finished | pcs_score=%s", final_state.get("pcs_score"))
+                st.rerun()
+    with cloud_col:
+        cloud_disabled = brain_status != "在线"
+        if st.button("运行云数据库分析", use_container_width=True, disabled=cloud_disabled):
+            project_id = _default_cloud_project_id()
+            st.session_state.cloud_game_result = {}
+            st.session_state.cloud_game_report = ""
+            st.session_state.cloud_game_error = ""
+            logger.info("Database game triggered | project_id=%s", project_id)
+            try:
+                with st.status("正在运行云数据库 Master Agent...", expanded=True) as status:
+                    status.write(f"正在读取云数据库项目 {project_id}")
+                    status.write("正在执行检索、角色博弈、红队审查和完整报告生成")
+                    result, report = _run_cloud_database_game(project_id)
+                    status.update(label="云数据库分析完成", state="complete", expanded=False)
+            except Exception as exc:
+                logger.exception("Database game failed | project_id=%s", project_id)
+                st.session_state.cloud_game_error = str(exc)
+            else:
+                st.session_state.cloud_game_result = result
+                st.session_state.cloud_game_report = report
+                logger.info("Database game finished | run_id=%s", result.get("run_id"))
+            st.rerun()
+    if has_data and brain_status != "在线":
+        st.warning("需要配置 BRAIN_API_KEY 或 OPENAI_API_KEY 才能开始分析。")
 
-    with right_col:
-        _render_project_definition(state, has_data, material_count)
-        _render_process_card(has_data, run_done, pcs_score)
-        if st.session_state.event_log:
-            recent_events = st.session_state.event_log[-6:]
-            with st.container(border=True):
-                st.markdown("#### 处理日志")
-                st.caption(f"{len(st.session_state.event_log)} 条事件")
-                for item in recent_events:
-                    st.markdown(f"- {_short_event(item)}")
-        with st.container(border=True):
-            st.markdown("#### 系统状态")
-            st.caption("Runtime")
-            st.markdown(f"**Eyes 视觉模型**  \n{eyes_status} / {os.getenv('EYES_MODEL', 'qwen-vl-max')}")
-            st.markdown(f"**Brain 推理模型**  \n{brain_status} / {os.getenv('BRAIN_MODEL', 'deepseek-reasoner')}")
-            st.markdown(f"**LangSmith Trace**  \n{smith_status}")
+    _render_cloud_game_result()
+
+    with st.expander("更换项目材料", expanded=not has_data):
+        _render_material_loader(brain_status)
+
+    state = st.session_state.project_state
+    run_done = bool(st.session_state.run_done)
+    _render_dimension_results(state, run_done)
+    _render_buyer_seller_results(state, run_done)
 
 
 if __name__ == "__main__":

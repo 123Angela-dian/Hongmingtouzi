@@ -1,0 +1,34 @@
+{
+  "investor_name": "我方投资人",
+  "positions": [
+    {
+      "term_key": "total_investment",
+      "unit": "CNY",
+      "minimum": "0",
+      "preferred": "300000000",
+      "maximum": "500000000"
+    },
+    {
+      "term_key": "creditor_recovery_ratio",
+      "unit": "ratio",
+      "minimum": "0.50",
+      "preferred": "0.65",
+      "maximum": "0.75"
+    },
+    {
+      "term_key": "debtor_settlement_cash",
+      "unit": "CNY",
+      "minimum": "0",
+      "preferred": "10000000",
+      "maximum": "30000000"
+    }
+  ],
+  "minimum_irr": "0.18",
+  "maximum_holding_months": 36,
+  "minimum_downside_recovery_ratio": "0.70",
+  "prohibited_conditions": [
+    "核心资产无法解除查封",
+    "第一顺位债权无法完成转让或重组",
+    "交易后无法取得项目公司和印章控制权"
+  ]
+}

@@ -117,6 +117,75 @@ def build_master_plan(inventory: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def load_planning_snapshot(project_id: int, env_path: Path = Path(".env")) -> dict[str, Any]:
+    """Return bounded project signals used by the game Master to plan retrieval."""
+
+    inventory = inventory_project(project_id, env_path)
+    connection = connect(env_path)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT event_type,COUNT(*) AS count FROM {SOURCE_DB}.events "
+                "WHERE project_id=%s GROUP BY event_type ORDER BY count DESC",
+                (project_id,),
+            )
+            event_types = {row["event_type"]: int(row["count"]) for row in cursor.fetchall()}
+            cursor.execute(
+                f"SELECT evidence_type,COUNT(*) AS count FROM {SOURCE_DB}.evidences "
+                "WHERE project_id=%s GROUP BY evidence_type ORDER BY count DESC",
+                (project_id,),
+            )
+            evidence_types = {row["evidence_type"]: int(row["count"]) for row in cursor.fetchall()}
+            cursor.execute(
+                f"SELECT id,fact_key,value_text,status,confidence,need_review FROM {SOURCE_DB}.current_facts "
+                "WHERE project_id=%s ORDER BY need_review DESC,id LIMIT 80",
+                (project_id,),
+            )
+            facts = [
+                {
+                    "id": int(row["id"]),
+                    "fact_key": clean_text(row.get("fact_key"), 160),
+                    "value": clean_text(row.get("value_text"), 500),
+                    "status": row.get("status"),
+                    "confidence": row.get("confidence"),
+                    "need_review": bool(row.get("need_review")),
+                }
+                for row in cursor.fetchall()
+            ]
+            cursor.execute(
+                f"SELECT id,risk_type,risk_title,risk_summary,severity,need_review FROM {SOURCE_DB}.risks "
+                "WHERE project_id=%s ORDER BY FIELD(severity,'critical','high','medium','low'),need_review DESC,id LIMIT 60",
+                (project_id,),
+            )
+            risks = [
+                {
+                    "id": int(row["id"]),
+                    "risk_type": row.get("risk_type"),
+                    "title": clean_text(row.get("risk_title"), 200),
+                    "summary": clean_text(row.get("risk_summary"), 500),
+                    "severity": row.get("severity"),
+                    "need_review": bool(row.get("need_review")),
+                }
+                for row in cursor.fetchall()
+            ]
+            cursor.execute(
+                f"SELECT canonical_name,entity_type,COUNT(*) AS mentions FROM {AI_DB}.v_ai_entity_timeline "
+                "WHERE project_id=%s GROUP BY canonical_name,entity_type ORDER BY mentions DESC LIMIT 40",
+                (project_id,),
+            )
+            entities = [dict(row) for row in cursor.fetchall()]
+    finally:
+        connection.close()
+    return {
+        "inventory": inventory,
+        "available_event_types": event_types,
+        "available_evidence_types": evidence_types,
+        "fact_snapshot": facts,
+        "risk_snapshot": risks,
+        "entity_snapshot": entities,
+    }
+
+
 def _load_project_data(cursor, project_id: int) -> dict[str, Any]:
     cursor.execute(f"SELECT id,event_type,event_date,event_date_text,subject,action,object,amount,amount_unit,summary,status,confidence,need_review FROM {SOURCE_DB}.events WHERE project_id=%s ORDER BY id", (project_id,))
     events = list(cursor.fetchall())
@@ -190,6 +259,41 @@ def _raw_content_sweep(cursor, project_id: int, keywords: list[str], limit: int)
     return match_count, selected
 
 
+def _retrieval_config(agent_name: str, directive: dict[str, Any] | None) -> dict[str, Any]:
+    base = AGENT_CONFIG[agent_name]
+    config = {
+        "task": base["task"],
+        "event_types": set(base["event_types"]),
+        "evidence_types": set(base["evidence_types"]),
+        "keywords": list(base["keywords"]),
+    }
+    if not directive:
+        return config
+
+    allowed_event_types = set().union(*(item["event_types"] for item in AGENT_CONFIG.values()))
+    allowed_evidence_types = set().union(*(item["evidence_types"] for item in AGENT_CONFIG.values()))
+    config["event_types"].update(
+        value for value in directive.get("event_types") or [] if value in allowed_event_types
+    )
+    config["evidence_types"].update(
+        value for value in directive.get("evidence_types") or [] if value in allowed_evidence_types
+    )
+    dynamic_terms = [
+        *(directive.get("keywords") or []),
+        *(directive.get("focus_entities") or []),
+    ]
+    for value in dynamic_terms:
+        keyword = re.sub(r"[%_\x00-\x1f]", "", str(value)).strip()
+        if 1 < len(keyword) <= 40 and keyword not in config["keywords"]:
+            config["keywords"].append(keyword)
+        if len(config["keywords"]) >= 40:
+            break
+    objective = clean_text(directive.get("objective"), 1000)
+    if objective:
+        config["task"] = objective
+    return config
+
+
 def retrieve_agent_context(
     project_id: int,
     agent_name: str,
@@ -197,13 +301,17 @@ def retrieve_agent_context(
     max_evidences: int | None = None,
     max_raw_contents: int | None = None,
     env_path: Path = Path(".env"),
+    retrieval_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if agent_name not in AGENT_CONFIG:
         raise ValueError(f"未知Agent：{agent_name}")
-    config = AGENT_CONFIG[agent_name]
-    max_events = max_events or int(os.getenv("RAG_MAX_EVENTS", "40"))
-    max_evidences = max_evidences or int(os.getenv("RAG_MAX_EVIDENCES", "50"))
-    max_raw_contents = max_raw_contents or int(os.getenv("RAG_MAX_RAW_CONTENTS", "8"))
+    config = _retrieval_config(agent_name, retrieval_plan)
+    max_events = max_events or int((retrieval_plan or {}).get("max_events") or os.getenv("RAG_MAX_EVENTS", "40"))
+    max_evidences = max_evidences or int((retrieval_plan or {}).get("max_evidences") or os.getenv("RAG_MAX_EVIDENCES", "50"))
+    max_raw_contents = max_raw_contents or int((retrieval_plan or {}).get("max_raw_contents") or os.getenv("RAG_MAX_RAW_CONTENTS", "8"))
+    max_events = min(max(1, max_events), 200)
+    max_evidences = min(max(1, max_evidences), 250)
+    max_raw_contents = min(max(1, max_raw_contents), 30)
     inventory = inventory_project(project_id, env_path)
     connection = connect(env_path)
     try:
@@ -312,6 +420,13 @@ def retrieve_agent_context(
         "full_structured_scan_completed": True,
         "raw_scan_method": "MySQL全项目关键词条件扫描；命中内容相关性排序后进入模型。",
         "selection_method": "事件类型、证据类型、关键词、图关系、冲突、待审核状态综合评分。",
+        "master_directive_applied": {
+            "objective": config["task"],
+            "event_types": sorted(config["event_types"]),
+            "evidence_types": sorted(config["evidence_types"]),
+            "keywords": config["keywords"],
+            "must_verify": list((retrieval_plan or {}).get("must_verify") or []),
+        },
     }
     return {"sections": {"动态Graph RAG上下文": context}, "report": report}
 

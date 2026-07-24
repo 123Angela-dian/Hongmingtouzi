@@ -5,8 +5,11 @@ streamlit_*.log
 logs/
 output/
 .tmp_uploads/
+.data/
 __pycache__/
 *.pyc
+.venv/
+.venv311/
 .agents/
 .codex_backups/
 .git_upload/
